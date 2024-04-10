@@ -18,6 +18,7 @@
 #    <https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html>
 
 import os
+import os.path as osp
 import cv2
 import copy
 import yaml
@@ -229,9 +230,9 @@ def preprocess_video(source_video_uri, dst_video_folder, chunk_info, user_data, 
                     dst_video_folder, chunk_info, config_params['ffmpeg_settings']
                 )
 
-            resize_video(config_params['ffmpeg_settings'], user_data['bg_video_uri'], dst_video_folder, config_params['background_info'])
+            # resize_video(config_params['ffmpeg_settings'], user_data['bg_video_uri'], dst_video_folder, config_params['background_info'])
         tile_info, segment_info = tile_segment_info(chunk_info, user_data, user_data['generating_background'])
-        segment_video(config_params['ffmpeg_settings'], user_data['bg_video_uri'], dst_video_folder, segment_info)
+        resize_segment_video(config_params['ffmpeg_settings'], user_data['bg_video_uri'], dst_video_folder, segment_info, config_params['background_info'])
         user_video_spec = {'segment_info': segment_info, 'tile_info': tile_info}
         user_data['tile_idx'] += 1
     else:
@@ -594,6 +595,47 @@ def generate_dl_list(chunk_idx, tile_record, latest_result, dl_list):
 
     return dl_list
 
+
+def resize_segment_video(ffmpeg_settings, source_video_uri, dst_video_folder, segmentation_info, dst_video_info):
+    """
+    Resize and segment video tile from the original video
+
+    Parameters
+    ----------
+    ffmpeg_settings: dict
+        ffmpeg related information
+    source_video_uri: str
+        video uri of original video
+    dst_video_folder: str
+        folder path of the segmented video tile
+    segmentation_info: dict
+        tile information
+    dst_video_info: dict
+        information of the destination video
+        
+    Returns
+    -------
+        None
+    """
+
+    out_w = segmentation_info['segment_out_info']['width']
+    out_h = segmentation_info['segment_out_info']['height']
+    start_w = segmentation_info['start_position']['width']
+    start_h = segmentation_info['start_position']['height']
+    
+    dst_video_w = dst_video_info['width']
+    dst_video_h = dst_video_info['height']
+
+    result_frame_path = osp.join(dst_video_folder, f"%d.png")
+
+    cmd = f"{ffmpeg_settings['ffmpeg_path']} " \
+          f"-i {source_video_uri} " \
+          f"-threads {ffmpeg_settings['thread']} " \
+          f"-vf \"scale={dst_video_w}:{dst_video_h},setdar={dst_video_w}:{dst_video_h},crop={out_w}:{out_h}:{start_w}:{start_h}\" " \
+          f"-q:v 2 -f image2 {result_frame_path} " \
+          f"-loglevel {ffmpeg_settings['loglevel']}"
+
+    os.system(cmd)
 
 def get_surrounding_tiles(user_data, tile_idx):
     """
