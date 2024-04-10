@@ -19,6 +19,7 @@
 
 import os
 import cv2
+import copy
 import yaml
 import shutil
 import numpy as np
@@ -26,7 +27,7 @@ from e3po.utils import get_logger
 from e3po.utils.data_utilities import transcode_video, segment_video, resize_video
 from e3po.utils.decision_utilities import predict_motion_tile
 from e3po.utils.projection_utilities import fov_to_3d_polar_coord, \
-    _3d_polar_coord_to_pixel_coord, pixel_coord_to_tile, pixel_coord_to_relative_tile_coord
+    _3d_polar_coord_to_pixel_coord, pixel_coord_to_relative_tile_coord
 
 
 def video_analysis(user_data, video_info):
@@ -350,24 +351,30 @@ def generate_display_result(curr_display_frames, current_display_chunks, curr_fo
     coord_tile_list = pixel_coord_to_tile(pixel_coord, config_params['total_tile_num'], video_size, chunk_idx)
     relative_tile_coord = pixel_coord_to_relative_tile_coord(pixel_coord, coord_tile_list, video_size, chunk_idx)
     unavail_pixel_coord = ~np.isin(coord_tile_list, avail_tile_list)    # calculate the pixels that have not been transmitted.
-    coord_tile_list[unavail_pixel_coord] = -1
+    coord_tile_list[unavail_pixel_coord] -= config_params['total_tile_num'] # negative to represent background
 
-    display_img = np.full((coord_tile_list.shape[0], coord_tile_list.shape[1], 3), [128, 128, 128], dtype=np.float32)  # create an empty matrix for the final image
-
-    for i, tile_idx in enumerate(avail_tile_list):
-        hit_coord_mask = (coord_tile_list == tile_idx)
-        if not np.any(hit_coord_mask):  # if no pixels belong to the current frame, skip
-            continue
-
-        if tile_idx != -1:
-            dstMap_u, dstMap_v = cv2.convertMaps(relative_tile_coord[0].astype(np.float32), relative_tile_coord[1].astype(np.float32), cv2.CV_16SC2)
-        else:
-            out_pixel_coord = _3d_polar_coord_to_pixel_coord(
+    # background coords, change with size, so need to change when size adaption
+    background_pixel_coord = _3d_polar_coord_to_pixel_coord(
                 _3d_polar_coord,
                 config_params['background_info']['background_projection_mode'],
                 [config_params['background_height'], config_params['background_width']]
             )
-            dstMap_u, dstMap_v = cv2.convertMaps(out_pixel_coord[0].astype(np.float32), out_pixel_coord[1].astype(np.float32), cv2.CV_16SC2)
+    background_coord_tile_list = pixel_coord_to_tile(background_pixel_coord, config_params['total_tile_num'], video_size, chunk_idx, '_bg')
+    background_relative_tile_coord = pixel_coord_to_relative_tile_coord(background_pixel_coord, background_coord_tile_list, video_size, chunk_idx, '_bg')
+
+    display_img = np.full((coord_tile_list.shape[0], coord_tile_list.shape[1], 3), [128, 128, 128], dtype=np.float32)  # create an empty matrix for the final image
+
+    for i, tile_idx in enumerate(avail_tile_list):
+        if tile_idx is str:
+            tile_idx = int(tile_idx[:-3]) - config_params['total_tile_num'] # remove _bg
+        hit_coord_mask = (coord_tile_list == tile_idx)
+        if not np.any(hit_coord_mask):  # if no pixels belong to the current frame, skip
+            continue
+
+        if tile_idx >= 0:
+            dstMap_u, dstMap_v = cv2.convertMaps(relative_tile_coord[0].astype(np.float32), relative_tile_coord[1].astype(np.float32), cv2.CV_16SC2)
+        else:
+            dstMap_u, dstMap_v = cv2.convertMaps(background_relative_tile_coord[0].astype(np.float32), background_relative_tile_coord[1].astype(np.float32), cv2.CV_16SC2)
         remapped_frame = cv2.remap(curr_display_frames[i], dstMap_u, dstMap_v, cv2.INTER_LINEAR)
         display_img[hit_coord_mask] = remapped_frame[hit_coord_mask]
 
@@ -611,3 +618,90 @@ def get_surrounding_tiles(user_data, tile_idx):
             new_col = (col + dc) % tile_height_num
             surrounding_tiles.append(new_row * tile_width_num + new_col)
     return surrounding_tiles
+
+def pixel_coord_to_tile(pixel_coord, total_tile_num, video_size, chunk_idx, tile_id_appendix = ''):
+    """
+    Calculate the corresponding tile, for given pixel coordinates
+
+    Parameters
+    ----------
+    pixel_coord: array
+        pixel coordinates
+    total_tile_num: int
+        total num of tiles for different approach
+    video_size: dict
+        video size of preprocessed video
+    chunk_idx: int
+        chunk index
+    tile_id_appendix: str
+        append behind name of tile_id
+
+    Returns
+    -------
+    coord_tile_list: list
+        the calculated tile list, for the given pixel coordinates
+    """
+
+    coord_tile_list = np.full(pixel_coord[0].shape, 0)
+    for i in range(total_tile_num):
+        tile_id = f"chunk_{str(chunk_idx).zfill(4)}_tile_{str(i).zfill(3)}{tile_id_appendix}"
+        if tile_id not in video_size:
+            continue
+        tile_idx = video_size[tile_id]['user_video_spec']['tile_info']['tile_idx']
+        if len(tile_id_appendix) > 0:
+            tile_idx = tile_idx[:-len(tile_id_appendix)]
+        tile_start_width = video_size[tile_id]['user_video_spec']['segment_info']['start_position']['width']
+        tile_start_height = video_size[tile_id]['user_video_spec']['segment_info']['start_position']['height']
+        tile_width = video_size[tile_id]['user_video_spec']['segment_info']['segment_out_info']['width']
+        tile_height = video_size[tile_id]['user_video_spec']['segment_info']['segment_out_info']['height']
+
+        # Create a Boolean mask to check if the coordinates are within the tile range
+        mask_width = (tile_start_width <= pixel_coord[0]) & (pixel_coord[0] < tile_start_width + tile_width)
+        mask_height = (tile_start_height <= pixel_coord[1]) & (pixel_coord[1] < tile_start_height + tile_height)
+
+        # find coordinates that satisfy both width and height conditions
+        hit_coord_mask = mask_width & mask_height
+
+        # update coord_tile_list
+        coord_tile_list[hit_coord_mask] = tile_idx
+
+    return coord_tile_list
+
+def pixel_coord_to_relative_tile_coord(pixel_coord, coord_tile_list, video_info, chunk_idx, tile_id_appendix = ''):
+    """
+    Calculate the relative position of the pixel_coord coordinates on each tile.
+
+    Parameters
+    ----------
+    pixel_coord: array
+        pixel coordinates
+    coord_tile_list: list
+        calculated tile list
+    video_info: dict
+    chunk_idx: int
+        chunk index
+    tile_id_appendix: str
+        append behind name of tile_id
+
+    Returns
+    -------
+    relative_tile_coord: array
+        the relative tile coord for the given pixel coordinates
+    """
+
+    relative_tile_coord = copy.deepcopy(pixel_coord)
+    unique_tile_list = np.unique(coord_tile_list)
+    for i in unique_tile_list:
+        tile_id = f"chunk_{str(chunk_idx).zfill(4)}_tile_{str(i).zfill(3)}{tile_id_appendix}"
+        tile_start_width = video_info[tile_id]['user_video_spec']['segment_info']['start_position']['width']
+        tile_start_height = video_info[tile_id]['user_video_spec']['segment_info']['start_position']['height']
+        tile_width = video_info[tile_id]['user_video_spec']['segment_info']['segment_out_info']['width']
+        tile_height = video_info[tile_id]['user_video_spec']['segment_info']['segment_out_info']['height']
+
+        hit_coord_mask = (coord_tile_list == i)
+
+        # update the relative position
+        relative_tile_coord[0][hit_coord_mask] = np.clip(relative_tile_coord[0][hit_coord_mask] - tile_start_width, 0, tile_width - 1)
+        relative_tile_coord[1][hit_coord_mask] = np.clip(relative_tile_coord[1][hit_coord_mask] - tile_start_height, 0, tile_height - 1)
+
+    return relative_tile_coord
