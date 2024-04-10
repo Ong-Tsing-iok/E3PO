@@ -1,6 +1,6 @@
 # This is e3po system configuration file, which should not be changed.
 
-test_group: group_2                       # experiment group name, simulation results will be stored in their respective folders
+test_group: group_3                       # experiment group name, simulation results will be stored in their respective folders
 project_path: ~
 
 e3po_settings:

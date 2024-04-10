@@ -103,6 +103,8 @@ def read_config():
         background_info = {
             "width": opt['background']['width'],
             "height": opt['background']['height'],
+            "tile_width": int(opt['background']['width'] / tile_width_num),
+            "tile_height": int(opt['background']['height'] / tile_height_num),
             "background_projection_mode": opt['background']['projection_mode']
         }
     else:
@@ -178,11 +180,14 @@ def preprocess_video(source_video_uri, dst_video_folder, chunk_info, user_data, 
         user_data['chunk_idx'] = chunk_info['chunk_idx']
         user_data['tile_idx'] = 0
         user_data['transcode_video_uri'] = source_video_uri
+        user_data['generating_background'] = False
     else:
         if user_data['chunk_idx'] != chunk_info['chunk_idx']:
             user_data['chunk_idx'] = chunk_info['chunk_idx']
             user_data['tile_idx'] = 0
             user_data['transcode_video_uri'] = source_video_uri
+            user_data['generating_background'] = False
+            
 
     # transcoding
     src_projection = config_params['projection_mode']
@@ -199,31 +204,35 @@ def preprocess_video(source_video_uri, dst_video_folder, chunk_info, user_data, 
     transcode_video_uri = user_data['transcode_video_uri']
 
     # segmentation
-    if user_data['tile_idx'] < config_params['total_tile_num']:
-        tile_info, segment_info = tile_segment_info(chunk_info, user_data)
+    if user_data['tile_idx'] < config_params['total_tile_num'] and not user_data['generating_background']:
+        tile_info, segment_info = tile_segment_info(chunk_info, user_data, user_data['generating_background'])
         segment_video(config_params['ffmpeg_settings'], transcode_video_uri, dst_video_folder, segment_info)
         user_data['tile_idx'] += 1
         user_video_spec = {'segment_info': segment_info, 'tile_info': tile_info}
+        if user_data['tile_idx'] == config_params['total_tile_num']:
+            user_data['generating_background'] = True
+            user_data['tile_idx'] = 0
 
-    # resize, background stream
-    elif user_data['tile_idx'] == config_params['total_tile_num'] and config_params['background_flag']:
-        bg_projection = config_params['background_info']['background_projection_mode']
-        if bg_projection == src_projection:
-            bg_video_uri = source_video_uri
-        else:
-            src_resolution = [video_info['height'], video_info['width']]
-            bg_resolution = [config_params['background_height'], config_params['background_width']]
-            bg_video_uri = transcode_video(
-                source_video_uri, src_projection, bg_projection, src_resolution, bg_resolution,
-                dst_video_folder, chunk_info, config_params['ffmpeg_settings']
-            )
+    # resize background stream and segment
+    elif user_data['tile_idx'] < config_params['total_tile_num'] and config_params['background_flag'] and user_data['generating_background']:
+        # create the background stream
+        if user_data['tile_idx'] == 0:
+            bg_projection = config_params['background_info']['background_projection_mode']
+            if bg_projection == src_projection:
+                user_data['bg_video_uri'] = source_video_uri
+            else:
+                src_resolution = [video_info['height'], video_info['width']]
+                bg_resolution = [config_params['background_height'], config_params['background_width']]
+                user_data['bg_video_uri'] = transcode_video(
+                    source_video_uri, src_projection, bg_projection, src_resolution, bg_resolution,
+                    dst_video_folder, chunk_info, config_params['ffmpeg_settings']
+                )
 
-        resize_video(config_params['ffmpeg_settings'], bg_video_uri, dst_video_folder, config_params['background_info'])
+            resize_video(config_params['ffmpeg_settings'], user_data['bg_video_uri'], dst_video_folder, config_params['background_info'])
+        tile_info, segment_info = tile_segment_info(chunk_info, user_data, user_data['generating_background'])
+        segment_video(config_params['ffmpeg_settings'], user_data['bg_video_uri'], dst_video_folder, segment_info)
+        user_video_spec = {'segment_info': segment_info, 'tile_info': tile_info}
         user_data['tile_idx'] += 1
-        user_video_spec = {
-            'segment_info': config_params['background_info'],
-            'tile_info': {'chunk_idx': chunk_info['chunk_idx'], 'tile_idx': -1}
-        }
     else:
         user_video_spec = None
 
@@ -403,7 +412,7 @@ def update_decision_info(user_data, tile_record, curr_ts):
     return user_data
 
 
-def tile_segment_info(chunk_info, user_data):
+def tile_segment_info(chunk_info, user_data, background):
     """
     Generate the information for the current tile, with required format
     Parameters
@@ -412,6 +421,8 @@ def tile_segment_info(chunk_info, user_data):
         chunk information
     user_data: dict
         user related information
+    background: bool
+        segmenting background or not
 
     Returns
     -------
@@ -427,20 +438,38 @@ def tile_segment_info(chunk_info, user_data):
     index_width = tile_idx % user_data['config_params']['tile_width_num']        # determine which col
     index_height = tile_idx // user_data['config_params']['tile_width_num']      # determine which row
 
-    segment_info = {
-        'segment_out_info': {
-            'width': user_data['config_params']['tile_width'],
-            'height': user_data['config_params']['tile_height']
-        },
-        'start_position': {
-            'width': index_width * user_data['config_params']['tile_width'],
-            'height': index_height * user_data['config_params']['tile_height']
+    if not background:
+        segment_info = {
+            'segment_out_info': {
+                'width': user_data['config_params']['tile_width'],
+                'height': user_data['config_params']['tile_height']
+            },
+            'start_position': {
+                'width': index_width * user_data['config_params']['tile_width'],
+                'height': index_height * user_data['config_params']['tile_height']
+            }
         }
-    }
+    else :
+        segment_info = {
+            'segment_out_info': {
+                'width': user_data['config_params']['background_info']['tile_width'],
+                'height': user_data['config_params']['background_info']['tile_height']
+            },
+            'start_position': {
+                'width': index_width * user_data['config_params']['background_info']['tile_width'],
+                'height': index_height * user_data['config_params']['background_info']['tile_height']
+            }
+        }
 
-    tile_info = {
-        'chunk_idx': user_data['chunk_idx'],
-        'tile_idx': tile_idx
-    }
+    if not background:
+        tile_info = {
+            'chunk_idx': user_data['chunk_idx'],
+            'tile_idx': tile_idx
+        }
+    else:
+        tile_info = {
+            'chunk_idx': user_data['chunk_idx'],
+            'tile_idx': f'{str(tile_idx).zfill(3)}_bg'
+        }
 
     return tile_info, segment_info
