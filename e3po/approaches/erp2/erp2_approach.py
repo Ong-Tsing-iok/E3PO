@@ -27,7 +27,7 @@ from e3po.utils import get_logger
 from e3po.utils.data_utilities import transcode_video, segment_video, resize_video
 from e3po.utils.decision_utilities import predict_motion_tile
 from e3po.utils.projection_utilities import fov_to_3d_polar_coord, \
-    _3d_polar_coord_to_pixel_coord, pixel_coord_to_relative_tile_coord
+    _3d_polar_coord_to_pixel_coord
 
 
 def video_analysis(user_data, video_info):
@@ -341,7 +341,10 @@ def generate_display_result(curr_display_frames, current_display_chunks, curr_fo
     for i in range(len(tile_list)):
         tile_id = tile_list[i]['tile_id']
         tile_idx = video_size[tile_id]['user_video_spec']['tile_info']['tile_idx']
+        if type(tile_idx) == str:
+            tile_idx = int(tile_idx[:-3]) - config_params['total_tile_num'] # remove _bg and make negative
         avail_tile_list.append(tile_idx)
+        get_logger().debug(f'available tile {tile_idx}') # available tiles no problem
 
     # calculating fov_uv parameters
     fov_ypr = [float(curr_fov['curr_motion']['yaw']), float(curr_fov['curr_motion']['pitch']), 0]
@@ -349,34 +352,38 @@ def generate_display_result(curr_display_frames, current_display_chunks, curr_fo
     pixel_coord = _3d_polar_coord_to_pixel_coord(_3d_polar_coord, config_params['projection_mode'], [config_params['converted_height'], config_params['converted_width']])
 
     coord_tile_list = pixel_coord_to_tile(pixel_coord, config_params['total_tile_num'], video_size, chunk_idx)
+    get_logger().debug(f'coord tile list: {coord_tile_list.shape}')
     relative_tile_coord = pixel_coord_to_relative_tile_coord(pixel_coord, coord_tile_list, video_size, chunk_idx)
+    get_logger().debug(f'relative_tile_coord: {relative_tile_coord}')
     unavail_pixel_coord = ~np.isin(coord_tile_list, avail_tile_list)    # calculate the pixels that have not been transmitted.
     coord_tile_list[unavail_pixel_coord] -= config_params['total_tile_num'] # negative to represent background
-
+    # get_logger().debug(f'coord tile list with bg: {coord_tile_list}')
     # background coords, change with size, so need to change when size adaption
-    background_pixel_coord = _3d_polar_coord_to_pixel_coord(
-                _3d_polar_coord,
-                config_params['background_info']['background_projection_mode'],
-                [config_params['background_height'], config_params['background_width']]
-            )
-    background_coord_tile_list = pixel_coord_to_tile(background_pixel_coord, config_params['total_tile_num'], video_size, chunk_idx, '_bg')
-    background_relative_tile_coord = pixel_coord_to_relative_tile_coord(background_pixel_coord, background_coord_tile_list, video_size, chunk_idx, '_bg')
+    if config_params['background_flag']:
+        background_pixel_coord = _3d_polar_coord_to_pixel_coord(
+                    _3d_polar_coord,
+                    config_params['background_info']['background_projection_mode'],
+                    [config_params['background_height'], config_params['background_width']]
+                )
+        background_coord_tile_list = pixel_coord_to_tile(background_pixel_coord, config_params['total_tile_num'], video_size, chunk_idx, '_bg')
+        get_logger().debug(f'background_coord_tile_list: {background_coord_tile_list.shape}')
+        background_relative_tile_coord = pixel_coord_to_relative_tile_coord(background_pixel_coord, background_coord_tile_list, video_size, chunk_idx, '_bg')
+        get_logger().debug(f'background_relative_tile_coord: {background_relative_tile_coord}')
 
     display_img = np.full((coord_tile_list.shape[0], coord_tile_list.shape[1], 3), [128, 128, 128], dtype=np.float32)  # create an empty matrix for the final image
 
     for i, tile_idx in enumerate(avail_tile_list):
-        if tile_idx is str:
-            tile_idx = int(tile_idx[:-3]) - config_params['total_tile_num'] # remove _bg
         hit_coord_mask = (coord_tile_list == tile_idx)
         if not np.any(hit_coord_mask):  # if no pixels belong to the current frame, skip
             continue
-
+        get_logger().debug(f'mapping tile {tile_idx}')
         if tile_idx >= 0:
             dstMap_u, dstMap_v = cv2.convertMaps(relative_tile_coord[0].astype(np.float32), relative_tile_coord[1].astype(np.float32), cv2.CV_16SC2)
         else:
             dstMap_u, dstMap_v = cv2.convertMaps(background_relative_tile_coord[0].astype(np.float32), background_relative_tile_coord[1].astype(np.float32), cv2.CV_16SC2)
         remapped_frame = cv2.remap(curr_display_frames[i], dstMap_u, dstMap_v, cv2.INTER_LINEAR)
         display_img[hit_coord_mask] = remapped_frame[hit_coord_mask]
+        cv2.imshow(f'{tile_idx}', curr_display_frames[i])
 
     cv2.imwrite(dst_video_frame_uri, display_img, [cv2.IMWRITE_JPEG_QUALITY, 100])
 
