@@ -24,7 +24,7 @@ import shutil
 import numpy as np
 from e3po.utils import get_logger
 from e3po.utils.data_utilities import transcode_video, segment_video, resize_video
-from e3po.utils.decision_utilities import predict_motion_tile, tile_decision, generate_dl_list
+from e3po.utils.decision_utilities import predict_motion_tile
 from e3po.utils.projection_utilities import fov_to_3d_polar_coord, \
     _3d_polar_coord_to_pixel_coord, pixel_coord_to_tile, pixel_coord_to_relative_tile_coord
 
@@ -274,7 +274,9 @@ def download_decision(network_stats, motion_history, video_size, curr_ts, user_d
 
     if curr_ts == 0:  # initialize the related parameters
         user_data['next_download_idx'] = 0
-        user_data['latest_decision'] = []
+        user_data['latest_decision'] = {"high_res": [], "background": []}
+        # if user_data['config_params']['background_flag']:
+        #     user_data['latest_decision']['background'] = []
     dl_list = []
     chunk_idx = user_data['next_download_idx']
     latest_decision = user_data['latest_decision']
@@ -396,18 +398,21 @@ def update_decision_info(user_data, tile_record, curr_ts):
     """
 
     # update latest_decision
-    for i in range(len(tile_record)):
-        if tile_record[i] not in user_data['latest_decision']:
-            user_data['latest_decision'].append(tile_record[i])
-    if user_data['config_params']['background_flag']:
-        if -1 not in user_data['latest_decision']:
-            user_data['latest_decision'].append(-1)
+    for i in range(len(tile_record['high_res'])):
+        if tile_record['high_res'][i] not in user_data['latest_decision']['high_res']:
+            user_data['latest_decision']['high_res'].append(tile_record['high_res'][i])
+    # if user_data['config_params']['background_flag']:
+    #     if -1 not in user_data['latest_decision']:
+    #         user_data['latest_decision'].append(-1)
+    for i in range(len(tile_record['background'])):
+        if tile_record['background'][i] not in user_data['latest_decision']['background']:
+            user_data['latest_decision']['background'].append(tile_record['background'][i])
 
     # update chunk_idx & latest_decision
     if curr_ts == 0 or curr_ts >= user_data['video_info']['pre_download_duration'] \
             + user_data['next_download_idx'] * user_data['video_info']['chunk_duration'] * 1000:
         user_data['next_download_idx'] += 1
-        user_data['latest_decision'] = []
+        user_data['latest_decision'] = {"high_res": [], "background": []}
 
     return user_data
 
@@ -473,3 +478,136 @@ def tile_segment_info(chunk_info, user_data, background):
         }
 
     return tile_info, segment_info
+
+def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data):
+    """
+    Deciding which tiles should be transmitted for each chunk, within the prediction window
+    (As an example, users can implement their customized function.)
+
+    Parameters
+    ----------
+    predicted_record: dict
+        the predicted motion, with format {yaw: , pitch: , scale:}, where
+        the parameter 'scale' is used for transcoding approach
+    video_size: dict
+        the recorded whole video size after video preprocessing
+    range_fov: list
+        degree range of fov, with format [height, width]
+    chunk_idx: int
+        index of current chunk
+    user_data: dict
+        user related data structure, necessary information for tile decision
+
+    Returns
+    -------
+    tile_record: dist
+        the decided tile dist of current update, contains high_res and surrounding tiles (for background)
+    """
+    # The current tile decision method is to sample the fov range corresponding to the predicted motion of each chunk,
+    # and the union of the tile sets mapped by these sampling points is the tile set to be transmitted.
+    config_params = user_data['config_params']
+    tile_record = {"high_res": [], "background": []}
+    sampling_size = [50, 50]
+    converted_width = user_data['config_params']['converted_width']
+    converted_height = user_data['config_params']['converted_height']
+    for predicted_motion in predicted_record:
+        _3d_polar_coord = fov_to_3d_polar_coord([float(predicted_motion['yaw']), float(predicted_motion['pitch']), 0], range_fov, sampling_size)
+        pixel_coord = _3d_polar_coord_to_pixel_coord(_3d_polar_coord, config_params['projection_mode'], [converted_height, converted_width])
+        coord_tile_list = pixel_coord_to_tile(pixel_coord, config_params['total_tile_num'], video_size, chunk_idx)
+        unique_tile_list = [int(item) for item in np.unique(coord_tile_list)]
+        tile_record['high_res'].extend(unique_tile_list)
+
+    # add surrounding tiles of predicted tiles as high-probability tiles
+    if config_params['background_flag']:
+        # if -1 not in user_data['latest_decision']:
+        #     tile_record.append(-1)
+        for tile_idx in tile_record['high_res']:
+            surrounding_tiles = get_surrounding_tiles(user_data, tile_idx)
+            for tile in surrounding_tiles:
+                if tile not in tile_record['high_res'] and tile not in tile_record['background']:
+                    tile_record['background'].append(tile)
+
+    return tile_record
+
+def generate_dl_list(chunk_idx, tile_record, latest_result, dl_list):
+    """
+    Based on the decision result, generate the required dl_list to be returned in the specified format.
+    (As an example, users can implement their corresponding function.)
+
+    Parameters
+    ----------
+    chunk_idx: int
+        the index of current chunk
+    tile_record: dict
+        the decided tile dist of current update, contains high_res and surrounding tiles (for background)
+    latest_result: dict
+        recording the latest decision result, have high_res and background lists
+    dl_list: list
+        the decided tile list
+
+    Returns
+    -------
+    dl_list: list
+        updated dl_list
+    """
+
+    tile_result = {"high_res": [], "background": []}
+    # add the predicted high_res tiles
+    for i in range(len(tile_record['high_res'])):
+        tile_idx = tile_record['high_res'][i]
+        if tile_idx not in latest_result['high_res']:
+            if tile_idx != -1:
+                tile_id = f"chunk_{str(chunk_idx).zfill(4)}_tile_{str(tile_idx).zfill(3)}"
+            else:
+                tile_id = f"chunk_{str(chunk_idx).zfill(4)}_background"
+            tile_result['high_res'].append(tile_id)
+            
+    # add the surrounding background tiles
+    for bg_tile in tile_record['background']:
+        if bg_tile not in latest_result['background'] and bg_tile not in latest_result['high_res']:
+            tile_id = f"chunk_{str(chunk_idx).zfill(4)}_tile_{str(bg_tile).zfill(3)}_bg"
+            tile_result['background'].append(tile_id)
+
+    if len(tile_result['high_res']) != 0 or len(tile_result['background']) != 0:
+        dl_list.append(
+            {
+                'chunk_idx': chunk_idx,
+                'decision_data': {
+                    'tile_info': tile_result['high_res'] + tile_result['background']
+                }
+            }
+        )
+
+    return dl_list
+
+
+def get_surrounding_tiles(user_data, tile_idx):
+    """
+    Get the surrounding tiles of a certain tile
+    
+    Parameter
+    ---------
+    user_data: dict
+        user defined data structure, used for tile_width_num and tile_height_num
+    tile_idx: int
+        the pivot tile
+        
+    Returns
+    -------
+    surrounding_tiles: list
+        the list containing surrounding tiles
+    """
+    tile_width_num = user_data['config_params']['tile_width_num']
+    tile_height_num = user_data['config_params']['tile_height_num']
+    row = tile_idx // tile_width_num      # determine which row
+    col = tile_idx % tile_width_num        # determine which col
+
+    surrounding_tiles = []
+    for dr in [-1, 0, 1]:
+        for dc in [-1, 0, 1]:
+            if dr == 0 and dc == 0:
+                continue  # Skip the current tile
+            new_row = (row + dr) % tile_width_num
+            new_col = (col + dc) % tile_height_num
+            surrounding_tiles.append(new_row * tile_width_num + new_col)
+    return surrounding_tiles
