@@ -4,8 +4,8 @@ approach_settings:
   approach:                                   
     projection_mode: erp                      # alias of projection format used in the developed approach
   video:  
-    tile_width_num: 6                         # number of horizontally segmented video tiles
-    tile_height_num: 6                        # number of vertically segmented video tiles
+    tile_width_num: 1 #6                         # number of horizontally segmented video tiles
+    tile_height_num: 1 #6                        # number of vertically segmented video tiles
     hw_size: 2                                # historical window for predicting motion, in seconds
     pw_size: 1                                # prediction window for predicting motion, in chunks
     converted:                                
@@ -13,7 +13,7 @@ approach_settings:
       height: 3840                            # converted video height
       width: 7680                             # converted video width
   background:                                 
-    background_flag: True                     # whether to use background stream
+    background_flag: False #True                     # whether to use background stream
     projection_mode: erp                      # projection mode of background stream
     height: 1080                              # height of background stream
     width: 1920                               # width of background stream
