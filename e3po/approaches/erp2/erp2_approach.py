@@ -691,6 +691,8 @@ def predict_motion_tile(motion_history, motion_history_size, motion_prediction_s
 
     return predicted_record
 
+def norm_pdf(x):
+    return np.exp(-np.square(x) / 2)/np.sqrt(2*np.pi)
 
 def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data):
     """
@@ -725,20 +727,28 @@ def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data)
     converted_height = user_data["config_params"]["converted_height"]
     high_res_tiles = []
     for predicted_motion in predicted_record:
-        _3d_polar_coord = fov_to_3d_polar_coord(
-            [float(predicted_motion["yaw"]), float(predicted_motion["pitch"]), 0],
-            range_fov,
-            sampling_size,
-        )
-        pixel_coord = _3d_polar_coord_to_pixel_coord(
-            _3d_polar_coord,
-            config_params["projection_mode"],
-            [converted_height, converted_width],
-        )
-        coord_tile_list = pixel_coord_to_tile(
-            pixel_coord, config_params["total_tile_num"], video_size, chunk_idx
-        )
-        unique_tile_list = [int(item) for item in np.unique(coord_tile_list)]
+        accum_prob = [0] * config_params["total_tile_num"]
+        for y, p in [[0, 0], [np.pi, 0], [0, np.pi/2], [0, -np.pi/2], [-np.pi/2, 0],  [np.pi/2, 0]]:
+            prob = norm_pdf(predicted_motion["yaw"] - y) * norm_pdf(predicted_motion["pitch"] - p) * norm_pdf(0)
+            _3d_polar_coord = fov_to_3d_polar_coord(
+                [float(y), float(p), 0],
+                range_fov,
+                sampling_size,
+            )
+            pixel_coord = _3d_polar_coord_to_pixel_coord(
+                _3d_polar_coord,
+                config_params["projection_mode"],
+                [converted_height, converted_width],
+            )
+            coord_tile_list = pixel_coord_to_tile(
+                pixel_coord, config_params["total_tile_num"], video_size, chunk_idx
+            )
+            unique, counts = np.unique(coord_tile_list, return_counts=True)
+            for i in range(len(unique)):
+                # get_logger().debug(f'in unique: {i}')
+                accum_prob[unique[int(i)]] += counts[int(i)] * prob
+        # get_logger().debug(f'accum_prob: {accum_prob}') #TODO don't know why is 5
+        unique_tile_list = filter(lambda item: accum_prob[item] > 5, range(config_params["total_tile_num"]))
         high_res_tiles.extend(unique_tile_list)
     tile_record["high_res"].extend([int(item) for item in np.unique(high_res_tiles)])
 
