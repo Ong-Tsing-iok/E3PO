@@ -26,7 +26,7 @@ import shutil
 import numpy as np
 from e3po.utils import get_logger
 from e3po.utils.data_utilities import transcode_video, segment_video, resize_video
-from e3po.utils.decision_utilities import predict_motion_tile
+# from e3po.utils.decision_utilities import predict_motion_tile
 from e3po.utils.projection_utilities import fov_to_3d_polar_coord, \
     _3d_polar_coord_to_pixel_coord
 
@@ -112,7 +112,7 @@ def read_config():
     else:
         background_info = {}
 
-    motion_history_size = opt['video']['hw_size'] * 1000
+    motion_history_size = opt['video']['hw_size']
     motino_prediction_size = opt['video']['pw_size']
     ffmpeg_settings = opt['ffmpeg']
     if not ffmpeg_settings['ffmpeg_path']:
@@ -273,7 +273,7 @@ def download_decision(network_stats, motion_history, video_size, curr_ts, user_d
 
     config_params = user_data['config_params']
     video_info = user_data['video_info']
-
+    get_logger().debug(f'curr_ts: {curr_ts}')
     if curr_ts == 0:  # initialize the related parameters
         user_data['next_download_idx'] = 0
         user_data['latest_decision'] = {"high_res": [], "background": []}
@@ -422,11 +422,10 @@ def update_decision_info(user_data, tile_record, curr_ts):
         if tile_record['background'][i] not in user_data['latest_decision']['background']:
             user_data['latest_decision']['background'].append(tile_record['background'][i])
 
-    # update chunk_idx & latest_decision
-    if curr_ts == 0 or curr_ts >= user_data['video_info']['pre_download_duration'] \
-            + user_data['next_download_idx'] * user_data['video_info']['chunk_duration'] * 1000:
+    # update chunk_idx & latest_decision #TODO this place is weird. Why curr_ts == 0 goes into the next chunk immediately?
+    if curr_ts >=  (user_data['next_download_idx'] + 1) * user_data['video_info']['chunk_duration'] * 1000 - user_data['video_info']['pre_download_duration']:
         user_data['next_download_idx'] += 1
-        user_data['latest_decision'] = {"high_res": [], "background": []}
+        user_data['latest_decision'] = {"high_res": [], "background": []} #TODO can attach previous predictions?
 
     return user_data
 
@@ -493,6 +492,44 @@ def tile_segment_info(chunk_info, user_data, background):
 
     return tile_info, segment_info
 
+def predict_motion_tile(motion_history, motion_history_size, motion_prediction_size):
+    """
+    Predicting motion with given historical information and prediction window size.
+    (As an example, users can implement their customized function.)
+
+    Parameters
+    ----------
+    motion_history: dict
+        a dictionary recording the historical motion, with the following format:
+
+    motion_history_size: int
+        the size of motion history to be used for predicting
+    motion_prediction_size: int
+        the size of motion to be predicted
+
+    Returns
+    -------
+    list
+        The predicted record list, which sequentially store the predicted motion of the future pw chunks.
+         Each motion dictionary is stored in the following format:
+            {'yaw ': yaw,' pitch ': pitch,' scale ': scale}
+    """
+    # Use exponential smoothing to predict the angle of each motion within pw for yaw and pitch.
+    a = 0.3  # Parameters for exponential smoothing prediction
+    history_window = [d['motion_record'] for d in motion_history]
+    predicted_motion = list(history_window)[0]
+    for motion_record in list(history_window)[-motion_history_size:]:
+        predicted_motion['yaw'] = a * predicted_motion['yaw'] + (1-a) * motion_record['yaw']
+        predicted_motion['pitch'] = a * predicted_motion['pitch'] + (1-a) * motion_record['pitch']
+        predicted_motion['scale'] = a * predicted_motion['scale'] + (1-a) * motion_record['scale']
+
+    # The current prediction method implemented is to use the same predicted motion for all chunks in pw.
+    predicted_record = []
+    for i in range(motion_prediction_size):
+        predicted_record.append(copy.deepcopy(predicted_motion))
+
+    return predicted_record
+
 def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data):
     """
     Deciding which tiles should be transmitted for each chunk, within the prediction window
@@ -524,13 +561,15 @@ def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data)
     sampling_size = [50, 50]
     converted_width = user_data['config_params']['converted_width']
     converted_height = user_data['config_params']['converted_height']
+    high_res_tiles = []
     for predicted_motion in predicted_record:
         _3d_polar_coord = fov_to_3d_polar_coord([float(predicted_motion['yaw']), float(predicted_motion['pitch']), 0], range_fov, sampling_size)
         pixel_coord = _3d_polar_coord_to_pixel_coord(_3d_polar_coord, config_params['projection_mode'], [converted_height, converted_width])
         coord_tile_list = pixel_coord_to_tile(pixel_coord, config_params['total_tile_num'], video_size, chunk_idx)
         unique_tile_list = [int(item) for item in np.unique(coord_tile_list)]
-        tile_record['high_res'].extend(unique_tile_list)
-
+        high_res_tiles.extend(unique_tile_list)
+    tile_record['high_res'].extend([int(item) for item in np.unique(high_res_tiles)])
+    
     # add surrounding tiles of predicted tiles as high-probability tiles
     if config_params['background_flag']:
         # if -1 not in user_data['latest_decision']:

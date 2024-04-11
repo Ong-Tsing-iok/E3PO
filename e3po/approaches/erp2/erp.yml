@@ -6,8 +6,8 @@ approach_settings:
   video:  
     tile_width_num: 6                         # number of horizontally segmented video tiles
     tile_height_num: 6                        # number of vertically segmented video tiles
-    hw_size: 2                                # historical window for predicting motion, in seconds
-    pw_size: 1                                # prediction window for predicting motion, in chunks
+    hw_size: 100                                # historical window for predicting motion, in motion steps (according to current setting, 100 step is one second)
+    pw_size: 100                                # prediction window for predicting motion, in motion steps
     converted:                                
       projection_mode: erp                    # converted projection format from the original erp video 
       height: 3840                            # converted video height
