@@ -15,7 +15,7 @@ approach_settings:
   background:                                 
     background_flag: True                     # whether to use background stream
     projection_mode: erp                      # projection mode of background stream
-    height: 1080                              # height of background stream
+    height: 960                              # height of background stream
     width: 1920                               # width of background stream
   ffmpeg:
     ffmpeg_path: ~                            # absolute path, if there are different versions of ffmpeg, please specify the absolute path of the ffmpeg
