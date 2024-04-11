@@ -13,7 +13,7 @@ approach_settings:
       height: 3840                            # converted video height
       width: 7680                             # converted video width
   background:                                 
-    background_flag: True                     # whether to use background stream
+    background_flag: False                     # whether to use background stream
     projection_mode: erp                      # projection mode of background stream
     height: 960                              # height of background stream
     width: 1920                               # width of background stream
