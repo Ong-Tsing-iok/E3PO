@@ -501,7 +501,11 @@ def predict_motion_tile(motion_history, motion_history_size, motion_prediction_s
     ----------
     motion_history: dict
         a dictionary recording the historical motion, with the following format:
-
+        {
+        'motion_ts': motion_ts,
+        'system_ts': curr_ts,
+        'motion_record': {'yaw ': yaw,' pitch ': pitch,' scale ': scale}
+        }
     motion_history_size: int
         the size of motion history to be used for predicting
     motion_prediction_size: int
@@ -514,19 +518,28 @@ def predict_motion_tile(motion_history, motion_history_size, motion_prediction_s
          Each motion dictionary is stored in the following format:
             {'yaw ': yaw,' pitch ': pitch,' scale ': scale}
     """
-    # Use exponential smoothing to predict the angle of each motion within pw for yaw and pitch.
-    a = 0.3  # Parameters for exponential smoothing prediction
+
     history_window = [d['motion_record'] for d in motion_history]
-    predicted_motion = list(history_window)[0]
-    for motion_record in list(history_window)[-motion_history_size:]:
-        predicted_motion['yaw'] = a * predicted_motion['yaw'] + (1-a) * motion_record['yaw']
-        predicted_motion['pitch'] = a * predicted_motion['pitch'] + (1-a) * motion_record['pitch']
-        predicted_motion['scale'] = a * predicted_motion['scale'] + (1-a) * motion_record['scale']
+    # Uses least square method to predict future #TODO might not be good? maybe higher order fitting will be better?
+    predicted_motion = {'yaw ': [],' pitch ': [],' scale ': []}
+    for pred_type in ['yaw', 'pitch', 'scale']:
+        history_data = [data[pred_type] for data in history_window[-motion_history_size:]] # convert list of dictionary into list of certain type
+        history_time = range(len(history_data))
+        # Create the design matrix
+        X = np.vstack([history_time, np.ones(len(history_time))]).T
+        # Use least squares to fit a linear model
+        m, c = np.linalg.lstsq(X, history_data, rcond=None)[0]
+        
+        # Make predictions for new data
+        prediction_time = np.array(range(len(history_data), len(history_data) + motion_prediction_size))
+        new_X = np.vstack([prediction_time, np.ones(len(prediction_time))]).T
+        predicted_motion[pred_type] = list(m * prediction_time + c)
+        
 
     # The current prediction method implemented is to use the same predicted motion for all chunks in pw.
     predicted_record = []
     for i in range(motion_prediction_size):
-        predicted_record.append(copy.deepcopy(predicted_motion))
+        predicted_record.append(copy.deepcopy({'yaw': predicted_motion['yaw'][i],'pitch': predicted_motion['pitch'][i],'scale': predicted_motion['scale'][i]}))
 
     return predicted_record
 
