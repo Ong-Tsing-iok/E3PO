@@ -12,6 +12,10 @@ approach_settings:
       projection_mode: erp                    # converted projection format from the original erp video 
       height: 3840                            # converted video height
       width: 7680                             # converted video width
+  mid_res:
+    projection_mode: erp                    # mid_res projection format from the original erp video 
+    height: 1920                            # mid_res video height
+    width: 3840                             # mid_res video width
   background:                                 
     background_flag: True                     # whether to use background stream
     projection_mode: erp                      # projection mode of background stream

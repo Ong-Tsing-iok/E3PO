@@ -104,6 +104,13 @@ def read_config():
     total_tile_num = tile_height_num * tile_width_num
     tile_width = int(opt["video"]["converted"]["width"] / tile_width_num)
     tile_height = int(opt["video"]["converted"]["height"] / tile_height_num)
+    mid_res_info = {
+            "width": opt["mid_res"]["width"],
+            "height": opt["mid_res"]["height"],
+            "tile_width": int(opt["mid_res"]["width"] / tile_width_num),
+            "tile_height": int(opt["mid_res"]["height"] / tile_height_num),
+            "projection_mode": opt["mid_res"]["projection_mode"],
+        }
     if background_flag:
         background_info = {
             "width": opt["background"]["width"],
@@ -140,6 +147,7 @@ def read_config():
         "tile_width": tile_width,
         "tile_height": tile_height,
         "background_info": background_info,
+        "mid_res_info": mid_res_info,
         "motion_history_size": motion_history_size,
         "motion_prediction_size": motino_prediction_size,
         "ffmpeg_settings": ffmpeg_settings,
@@ -188,13 +196,13 @@ def preprocess_video(
         user_data["chunk_idx"] = chunk_info["chunk_idx"]
         user_data["tile_idx"] = 0
         user_data["transcode_video_uri"] = source_video_uri
-        user_data["generating_background"] = False
+        user_data["generating_step"] = "high_res"
     else:
         if user_data["chunk_idx"] != chunk_info["chunk_idx"]:
             user_data["chunk_idx"] = chunk_info["chunk_idx"]
             user_data["tile_idx"] = 0
             user_data["transcode_video_uri"] = source_video_uri
-            user_data["generating_background"] = False
+            user_data["generating_step"] = "high_res"
 
     # transcoding
     src_projection = config_params["projection_mode"]
@@ -222,10 +230,10 @@ def preprocess_video(
     # segmentation
     if (
         user_data["tile_idx"] < config_params["total_tile_num"]
-        and not user_data["generating_background"]
+        and user_data["generating_step"] == "high_res"
     ):
         tile_info, segment_info = tile_segment_info(
-            chunk_info, user_data, user_data["generating_background"]
+            chunk_info, user_data, user_data["generating_step"]
         )
         segment_video(
             config_params["ffmpeg_settings"],
@@ -236,14 +244,14 @@ def preprocess_video(
         user_data["tile_idx"] += 1
         user_video_spec = {"segment_info": segment_info, "tile_info": tile_info}
         if user_data["tile_idx"] == config_params["total_tile_num"]:
-            user_data["generating_background"] = True
+            user_data["generating_step"] = "bg"
             user_data["tile_idx"] = 0
 
     # resize background stream and segment
     elif (
         user_data["tile_idx"] < config_params["total_tile_num"]
         and config_params["background_flag"]
-        and user_data["generating_background"]
+        and user_data["generating_step"] == "bg"
     ):
         # create the background stream
         if user_data["tile_idx"] == 0:
@@ -271,7 +279,7 @@ def preprocess_video(
 
             # resize_video(config_params['ffmpeg_settings'], user_data['bg_video_uri'], dst_video_folder, config_params['background_info'])
         tile_info, segment_info = tile_segment_info(
-            chunk_info, user_data, user_data["generating_background"]
+            chunk_info, user_data, user_data["generating_step"]
         )
         resize_segment_video(
             config_params["ffmpeg_settings"],
@@ -279,6 +287,50 @@ def preprocess_video(
             dst_video_folder,
             segment_info,
             config_params["background_info"],
+        )
+        user_video_spec = {"segment_info": segment_info, "tile_info": tile_info}
+        user_data["tile_idx"] += 1
+        if user_data["tile_idx"] == config_params["total_tile_num"]:
+            user_data["generating_step"] = "mid_res"
+            user_data["tile_idx"] = 0
+    # resize mid_res stream and segment
+    elif (
+        user_data["tile_idx"] < config_params["total_tile_num"]
+        and user_data["generating_step"] == "mid_res"
+    ):
+        # create the background stream
+        if user_data["tile_idx"] == 0:
+            mr_projection = config_params["mid_res"][
+                "projection_mode"
+            ]
+            if mr_projection == src_projection:
+                user_data["mr_video_uri"] = source_video_uri
+            else:
+                src_resolution = [video_info["height"], video_info["width"]]
+                mr_resolution = [
+                    config_params["mid_res_info"]["height"],
+                    config_params["mid_res_info"]["width"],
+                ]
+                user_data["mr_video_uri"] = transcode_video(
+                    source_video_uri,
+                    src_projection,
+                    mr_projection,
+                    src_resolution,
+                    mr_resolution,
+                    dst_video_folder,
+                    chunk_info,
+                    config_params["ffmpeg_settings"],
+                )
+
+        tile_info, segment_info = tile_segment_info(
+            chunk_info, user_data, user_data["generating_step"]
+        )
+        resize_segment_video(
+            config_params["ffmpeg_settings"],
+            user_data["mr_video_uri"],
+            dst_video_folder,
+            segment_info,
+            config_params["mid_res_info"],
         )
         user_video_spec = {"segment_info": segment_info, "tile_info": tile_info}
         user_data["tile_idx"] += 1
@@ -564,7 +616,7 @@ def update_decision_info(user_data, tile_record, curr_ts):
     return user_data
 
 
-def tile_segment_info(chunk_info, user_data, background):
+def tile_segment_info(chunk_info, user_data, gen_type):
     """
     Generate the information for the current tile, with required format
     Parameters
@@ -573,8 +625,8 @@ def tile_segment_info(chunk_info, user_data, background):
         chunk information
     user_data: dict
         user related information
-    background: bool
-        segmenting background or not
+    gen_type: str
+        generating type, can be high_res, mid_res, bg
 
     Returns
     -------
@@ -594,7 +646,7 @@ def tile_segment_info(chunk_info, user_data, background):
         tile_idx // user_data["config_params"]["tile_width_num"]
     )  # determine which row
 
-    if not background:
+    if gen_type == "high_res":
         segment_info = {
             "segment_out_info": {
                 "width": user_data["config_params"]["tile_width"],
@@ -605,7 +657,8 @@ def tile_segment_info(chunk_info, user_data, background):
                 "height": index_height * user_data["config_params"]["tile_height"],
             },
         }
-    else:
+        tile_info = {"chunk_idx": user_data["chunk_idx"], "tile_idx": tile_idx}
+    elif gen_type == "bg":
         segment_info = {
             "segment_out_info": {
                 "width": user_data["config_params"]["background_info"]["tile_width"],
@@ -618,13 +671,26 @@ def tile_segment_info(chunk_info, user_data, background):
                 * user_data["config_params"]["background_info"]["tile_height"],
             },
         }
-
-    if not background:
-        tile_info = {"chunk_idx": user_data["chunk_idx"], "tile_idx": tile_idx}
-    else:
         tile_info = {
             "chunk_idx": user_data["chunk_idx"],
             "tile_idx": f"{str(tile_idx).zfill(3)}_bg",
+        }
+    else:
+        segment_info = {
+            "segment_out_info": {
+                "width": user_data["config_params"]["mid_res_info"]["tile_width"],
+                "height": user_data["config_params"]["mid_res_info"]["tile_height"],
+            },
+            "start_position": {
+                "width": index_width
+                * user_data["config_params"]["mid_res_info"]["tile_width"],
+                "height": index_height
+                * user_data["config_params"]["mid_res_info"]["tile_height"],
+            },
+        }
+        tile_info = {
+            "chunk_idx": user_data["chunk_idx"],
+            "tile_idx": f"{str(tile_idx).zfill(3)}_mr",
         }
 
     return tile_info, segment_info
