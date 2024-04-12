@@ -300,7 +300,7 @@ def preprocess_video(
     ):
         # create the background stream
         if user_data["tile_idx"] == 0:
-            mr_projection = config_params["mid_res"][
+            mr_projection = config_params["mid_res_info"][
                 "projection_mode"
             ]
             if mr_projection == src_projection:
@@ -790,11 +790,12 @@ def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data)
     # The current tile decision method is to sample the fov range corresponding to the predicted motion of each chunk,
     # and the union of the tile sets mapped by these sampling points is the tile set to be transmitted.
     config_params = user_data["config_params"]
-    tile_record = {"high_res": [], "background": []}
+    tile_record = {"high_res": [], "mid_res": [], "background": []}
     sampling_size = [50, 50]
     converted_width = user_data["config_params"]["converted_width"]
     converted_height = user_data["config_params"]["converted_height"]
     high_res_tiles = []
+    mid_res_tiles = []
     for predicted_motion in predicted_record:
         accum_prob = [0] * config_params["total_tile_num"]
         for y, p in [[0, 0], [np.pi, 0], [0, np.pi/2], [0, -np.pi/2], [-np.pi/2, 0],  [np.pi/2, 0]]:
@@ -821,20 +822,24 @@ def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data)
         # #TODO don't know why threshold 5 is good or not
         unique_tile_list = filter(lambda item: accum_prob[item] > 10, range(config_params["total_tile_num"]))
         high_res_tiles.extend(unique_tile_list)
+        unique_tile_list = filter(lambda item: accum_prob[item] > 1, range(config_params["total_tile_num"]))
+        mid_res_tiles.extend(unique_tile_list)
     tile_record["high_res"].extend([int(item) for item in np.unique(high_res_tiles)])
+    tile_record["mid_res"].extend([int(item) for item in np.unique(mid_res_tiles)])
     # get_logger().debug(f'max_tile_pixel: {user_data["max_tile_pixel"]}')
     # add surrounding tiles of predicted tiles as high-probability tiles
     if config_params["background_flag"]:
         # if -1 not in user_data['latest_decision']:
         #     tile_record.append(-1)
-        for tile_idx in tile_record["high_res"]:
-            surrounding_tiles = get_surrounding_tiles(user_data, tile_idx)
-            for tile in surrounding_tiles:
-                if (
-                    tile not in tile_record["high_res"]
-                    and tile not in tile_record["background"]
-                ):
-                    tile_record["background"].append(tile)
+        tile_record["background"].extend(range(config_params["total_tile_num"]))
+        # for tile_idx in tile_record["high_res"]:
+        #     surrounding_tiles = get_surrounding_tiles(user_data, tile_idx)
+        #     for tile in surrounding_tiles:
+        #         if (
+        #             tile not in tile_record["high_res"]
+        #             and tile not in tile_record["background"]
+        #         ):
+        #             tile_record["background"].append(tile)
 
     return tile_record
 
@@ -861,7 +866,7 @@ def generate_dl_list(chunk_idx, tile_record, latest_result, dl_list):
         updated dl_list
     """
 
-    tile_result = {"high_res": [], "background": []}
+    tile_result = {"high_res": [], "mid_res": [], "background": []}
     # add the predicted high_res tiles
     for i in range(len(tile_record["high_res"])):
         tile_idx = tile_record["high_res"][i]
@@ -873,22 +878,30 @@ def generate_dl_list(chunk_idx, tile_record, latest_result, dl_list):
             else:
                 tile_id = f"chunk_{str(chunk_idx).zfill(4)}_background"
             tile_result["high_res"].append(tile_id)
-
+    # add the mid_res tiles
+    for mid_res_tile in tile_record["mid_res"]:
+        if (
+            mid_res_tile not in latest_result["mid_res"]
+            and mid_res_tile not in latest_result["high_res"]
+        ):
+            tile_id = f"chunk_{str(chunk_idx).zfill(4)}_tile_{str(mid_res_tile).zfill(3)}_mr"
+            tile_result["mid_res"].append(tile_id)
     # add the surrounding background tiles
     for bg_tile in tile_record["background"]:
         if (
             bg_tile not in latest_result["background"]
+            and bg_tile not in latest_result["mid_res"]
             and bg_tile not in latest_result["high_res"]
         ):
             tile_id = f"chunk_{str(chunk_idx).zfill(4)}_tile_{str(bg_tile).zfill(3)}_bg"
             tile_result["background"].append(tile_id)
 
-    if len(tile_result["high_res"]) != 0 or len(tile_result["background"]) != 0:
+    if len(tile_result["high_res"]) != 0 or len(tile_result["mid_res"]) != 0 or len(tile_result["background"]) != 0:
         dl_list.append(
             {
                 "chunk_idx": chunk_idx,
                 "decision_data": {
-                    "tile_info": tile_result["high_res"] + tile_result["background"]
+                    "tile_info": tile_result["high_res"] + tile_result["mid_res"] + tile_result["background"]
                 },
             }
         )
