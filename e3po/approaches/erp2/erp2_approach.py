@@ -326,8 +326,7 @@ def download_decision(
     if curr_ts == 0:  # initialize the related parameters
         user_data["next_download_idx"] = 0
         user_data["latest_decision"] = {"high_res": [], "background": []}
-        # if user_data['config_params']['background_flag']:
-        #     user_data['latest_decision']['background'] = []
+        user_data["max_tile_pixel"] = 0
     dl_list = []
     chunk_idx = user_data["next_download_idx"]
     latest_decision = user_data["latest_decision"]
@@ -440,7 +439,8 @@ def generate_display_result(
     coord_tile_list = pixel_coord_to_tile(
         pixel_coord, config_params["total_tile_num"], video_size, chunk_idx
     )
-    # get_logger().debug(f'coord tile list: {coord_tile_list.shape}')
+    get_logger().debug(f'frame {frame_idx}:')
+    get_logger().debug(f'seen tiles: {np.unique(coord_tile_list).tolist()}')
     relative_tile_coord = pixel_coord_to_relative_tile_coord(
         pixel_coord, coord_tile_list, video_size, chunk_idx
     )
@@ -448,6 +448,7 @@ def generate_display_result(
     unavail_pixel_coord = ~np.isin(
         coord_tile_list, avail_tile_list
     )  # calculate the pixels that have not been transmitted.
+    get_logger().debug(f'miss tiles: {np.unique(coord_tile_list[unavail_pixel_coord]).tolist()}')
     coord_tile_list[unavail_pixel_coord] -= config_params[
         "total_tile_num"
     ]  # negative to represent background
@@ -657,7 +658,9 @@ def predict_motion_tile(motion_history, motion_history_size, motion_prediction_s
     """
 
     history_window = [d["motion_record"] for d in motion_history]
-    # Uses least square method to predict future #TODO might not be good? maybe higher order fitting will be better?
+    # Uses least square method to predict future 
+    #TODO might not be good? maybe higher order fitting will be better?
+    #TODO maybe we don't need to predict all motion step? how about only one step?
     predicted_motion = {"yaw ": [], " pitch ": [], " scale ": []}
     for pred_type in ["yaw", "pitch", "scale"]:
         history_data = [
@@ -744,14 +747,16 @@ def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data)
                 pixel_coord, config_params["total_tile_num"], video_size, chunk_idx
             )
             unique, counts = np.unique(coord_tile_list, return_counts=True)
+            user_data["max_tile_pixel"] = max(user_data["max_tile_pixel"], np.max(counts))
             for i in range(len(unique)):
                 # get_logger().debug(f'in unique: {i}')
                 accum_prob[unique[int(i)]] += counts[int(i)] * prob
-        # get_logger().debug(f'accum_prob: {accum_prob}') #TODO don't know why is 5
-        unique_tile_list = filter(lambda item: accum_prob[item] > 5, range(config_params["total_tile_num"]))
+        get_logger().debug(f'accum_prob: {accum_prob}') 
+        # #TODO don't know why threshold 5 is good or not
+        unique_tile_list = filter(lambda item: accum_prob[item] > 10, range(config_params["total_tile_num"]))
         high_res_tiles.extend(unique_tile_list)
     tile_record["high_res"].extend([int(item) for item in np.unique(high_res_tiles)])
-
+    # get_logger().debug(f'max_tile_pixel: {user_data["max_tile_pixel"]}')
     # add surrounding tiles of predicted tiles as high-probability tiles
     if config_params["background_flag"]:
         # if -1 not in user_data['latest_decision']:
