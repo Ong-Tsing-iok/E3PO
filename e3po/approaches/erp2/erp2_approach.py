@@ -308,9 +308,7 @@ def preprocess_video(
     ):
         # create the background stream
         if user_data["tile_idx"] == 0:
-            mr_projection = config_params["mid_res_info"][
-                "projection_mode"
-            ]
+            mr_projection = config_params["mid_res_info"]["projection_mode"]
             if mr_projection == src_projection:
                 user_data["mr_video_uri"] = source_video_uri
             else:
@@ -385,7 +383,7 @@ def download_decision(
     get_logger().debug(f"curr_ts: {curr_ts}")
     if curr_ts == 0:  # initialize the related parameters
         user_data["next_download_idx"] = 0
-        user_data["latest_decision"] = {"high_res": [], "background": []}
+        user_data["latest_decision"] = {"high_res": [], "mid_res": [], "background": []}
         user_data["max_tile_pixel"] = 0
     dl_list = []
     chunk_idx = user_data["next_download_idx"]
@@ -474,10 +472,14 @@ def generate_display_result(
     for i in range(len(tile_list)):
         tile_id = tile_list[i]["tile_id"]
         tile_idx = video_size[tile_id]["user_video_spec"]["tile_info"]["tile_idx"]
-        if type(tile_idx) == str:
+        if type(tile_idx) == str and tile_idx[-3:] == "_mr":
             tile_idx = (
                 int(tile_idx[:-3]) - config_params["total_tile_num"]
-            )  # remove _bg and make negative
+            )  # mid_res is -1 ~ -n
+        elif type(tile_idx) == str and tile_idx[-3:] == "_bg":
+            tile_idx = (
+                int(tile_idx[:-3]) - config_params["total_tile_num"] * 2
+            )  # remove _bg and make negative, bg is -(n+1) ~ -2n
         avail_tile_list.append(tile_idx)
         # get_logger().debug(f'available tile {tile_idx}') # available tiles no problem
 
@@ -499,19 +501,29 @@ def generate_display_result(
     coord_tile_list = pixel_coord_to_tile(
         pixel_coord, config_params["total_tile_num"], video_size, chunk_idx
     )
-    get_logger().debug(f'frame {frame_idx}:')
-    get_logger().debug(f'seen tiles: {np.unique(coord_tile_list).tolist()}')
+    get_logger().debug(f"frame {frame_idx}:")
+    get_logger().debug(f"seen tiles: {np.unique(coord_tile_list).tolist()}")
     relative_tile_coord = pixel_coord_to_relative_tile_coord(
         pixel_coord, coord_tile_list, video_size, chunk_idx
     )
     # get_logger().debug(f'relative_tile_coord: {relative_tile_coord}')
-    unavail_pixel_coord = ~np.isin(
+    unavail_high_pixel_coord = ~np.isin(
         coord_tile_list, avail_tile_list
     )  # calculate the pixels that have not been transmitted.
-    get_logger().debug(f'miss tiles: {np.unique(coord_tile_list[unavail_pixel_coord]).tolist()}')
+    get_logger().debug(
+        f"high_res tiles: {np.unique(coord_tile_list[~unavail_high_pixel_coord]).tolist()}"
+    )
+    coord_tile_list[unavail_high_pixel_coord] -= config_params[
+        "total_tile_num"
+    ]  # turn to mid_res
+    unavail_pixel_coord = ~np.isin(coord_tile_list, avail_tile_list)
+    # get_logger().debug(f'mid_res tiles: {np.unique(coord_tile_list[~unavail_pixel_coord]).tolist()}')
+    get_logger().debug(
+        f"miss tiles: {np.unique(coord_tile_list[unavail_pixel_coord]).tolist()}"
+    )
     coord_tile_list[unavail_pixel_coord] -= config_params[
         "total_tile_num"
-    ]  # negative to represent background
+    ]  # turn to background
     # get_logger().debug(f'coord tile list with bg: {coord_tile_list}')
     # background coords, change with size, so need to change when size adaption
     if config_params["background_flag"]:
@@ -536,6 +548,29 @@ def generate_display_result(
             "_bg",
         )
         # get_logger().debug(f'background_relative_tile_coord: {background_relative_tile_coord}')
+    if config_params["mid_res_info"]:
+        mr_pixel_coord = _3d_polar_coord_to_pixel_coord(
+            _3d_polar_coord,
+            config_params["mid_res_info"]["projection_mode"],
+            [
+                config_params["mid_res_info"]["height"],
+                config_params["mid_res_info"]["width"],
+            ],
+        )
+        mr_coord_tile_list = pixel_coord_to_tile(
+            mr_pixel_coord,
+            config_params["total_tile_num"],
+            video_size,
+            chunk_idx,
+            "_mr",
+        )
+        mr_relative_tile_coord = pixel_coord_to_relative_tile_coord(
+            mr_pixel_coord,
+            mr_coord_tile_list,
+            video_size,
+            chunk_idx,
+            "_mr",
+        )
 
     display_img = np.full(
         (coord_tile_list.shape[0], coord_tile_list.shape[1], 3),
@@ -552,6 +587,12 @@ def generate_display_result(
             dstMap_u, dstMap_v = cv2.convertMaps(
                 relative_tile_coord[0].astype(np.float32),
                 relative_tile_coord[1].astype(np.float32),
+                cv2.CV_16SC2,
+            )
+        elif tile_idx >= -config_params["total_tile_num"]:
+            dstMap_u, dstMap_v = cv2.convertMaps(
+                mr_relative_tile_coord[0].astype(np.float32),
+                mr_relative_tile_coord[1].astype(np.float32),
                 cv2.CV_16SC2,
             )
         else:
@@ -606,6 +647,9 @@ def update_decision_info(user_data, tile_record, curr_ts):
             user_data["latest_decision"]["background"].append(
                 tile_record["background"][i]
             )
+    for i in range(len(tile_record["mid_res"])):
+        if tile_record["mid_res"][i] not in user_data["latest_decision"]["mid_res"]:
+            user_data["latest_decision"]["mid_res"].append(tile_record["mid_res"][i])
 
     # update chunk_idx & latest_decision #TODO may need to adjust according to network condition?
     if (
@@ -618,6 +662,7 @@ def update_decision_info(user_data, tile_record, curr_ts):
         user_data["next_download_idx"] += 1
         user_data["latest_decision"] = {
             "high_res": [],
+            "mid_res": [],
             "background": [],
         }  # TODO can attach previous predictions?
 
@@ -732,9 +777,9 @@ def predict_motion_tile(motion_history, motion_history_size, motion_prediction_s
     """
 
     history_window = [d["motion_record"] for d in motion_history]
-    # Uses least square method to predict future 
-    #TODO might not be good? maybe higher order fitting will be better?
-    #TODO maybe we don't need to predict all motion step? how about only one step?
+    # Uses least square method to predict future
+    # TODO might not be good? maybe higher order fitting will be better?
+    # TODO maybe we don't need to predict all motion step? how about only one step?
     predicted_motion = {"yaw ": [], " pitch ": [], " scale ": []}
     for pred_type in ["yaw", "pitch", "scale"]:
         history_data = [
@@ -768,8 +813,10 @@ def predict_motion_tile(motion_history, motion_history_size, motion_prediction_s
 
     return predicted_record
 
+
 def norm_pdf(x):
-    return np.exp(-np.square(x) / 2)/np.sqrt(2*np.pi)
+    return np.exp(-np.square(x) / 2) / np.sqrt(2 * np.pi)
+
 
 def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data):
     """
@@ -806,8 +853,19 @@ def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data)
     mid_res_tiles = []
     for predicted_motion in predicted_record:
         accum_prob = [0] * config_params["total_tile_num"]
-        for y, p in [[0, 0], [np.pi, 0], [0, np.pi/2], [0, -np.pi/2], [-np.pi/2, 0],  [np.pi/2, 0]]:
-            prob = norm_pdf(predicted_motion["yaw"] - y) * norm_pdf(predicted_motion["pitch"] - p) * norm_pdf(0)
+        for y, p in [
+            [0, 0],
+            [np.pi, 0],
+            [0, np.pi / 2],
+            [0, -np.pi / 2],
+            [-np.pi / 2, 0],
+            [np.pi / 2, 0],
+        ]:
+            prob = (
+                norm_pdf(predicted_motion["yaw"] - y)
+                * norm_pdf(predicted_motion["pitch"] - p)
+                * norm_pdf(0)
+            )
             _3d_polar_coord = fov_to_3d_polar_coord(
                 [float(y), float(p), 0],
                 range_fov,
@@ -822,33 +880,41 @@ def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data)
                 pixel_coord, config_params["total_tile_num"], video_size, chunk_idx
             )
             unique, counts = np.unique(coord_tile_list, return_counts=True)
-            user_data["max_tile_pixel"] = max(user_data["max_tile_pixel"], np.max(counts))
+            user_data["max_tile_pixel"] = max(
+                user_data["max_tile_pixel"], np.max(counts)
+            )
             for i in range(len(unique)):
                 # get_logger().debug(f'in unique: {i}')
                 accum_prob[unique[int(i)]] += counts[int(i)] * prob
-        get_logger().debug(f'accum_prob: {accum_prob}') 
+        get_logger().debug(f"accum_prob: {accum_prob}")
         # #TODO don't know why threshold 5 is good or not
-        unique_tile_list = filter(lambda item: accum_prob[item] > 10, range(config_params["total_tile_num"]))
+        unique_tile_list = filter(
+            lambda item: accum_prob[item] > 10, range(config_params["total_tile_num"])
+        )
         high_res_tiles.extend(unique_tile_list)
         if config_params["mid_res_flag"]:
-            unique_tile_list = filter(lambda item: accum_prob[item] > 1, range(config_params["total_tile_num"]))
+            unique_tile_list = filter(
+                lambda item: accum_prob[item] > 1,
+                range(config_params["total_tile_num"]),
+            )
             mid_res_tiles.extend(unique_tile_list)
     tile_record["high_res"].extend([int(item) for item in np.unique(high_res_tiles)])
-    tile_record["mid_res"].extend([int(item) for item in np.unique(mid_res_tiles)])
+    tile_record["mid_res"].extend(filter(lambda tile: tile not in tile_record["high_res"], [int(item) for item in np.unique(mid_res_tiles)]))
     # get_logger().debug(f'max_tile_pixel: {user_data["max_tile_pixel"]}')
     # add surrounding tiles of predicted tiles as high-probability tiles
     if config_params["background_flag"]:
         # if -1 not in user_data['latest_decision']:
         #     tile_record.append(-1)
-        tile_record["background"].extend(range(config_params["total_tile_num"]))
-        # for tile_idx in tile_record["high_res"]:
+        # tile_record["background"].extend(range(config_params["total_tile_num"]))
+        for tile_idx in range(config_params["total_tile_num"]):
+            if tile_idx not in tile_record["high_res"] and tile_idx not in tile_record["mid_res"]:
         #     surrounding_tiles = get_surrounding_tiles(user_data, tile_idx)
         #     for tile in surrounding_tiles:
         #         if (
         #             tile not in tile_record["high_res"]
         #             and tile not in tile_record["background"]
         #         ):
-        #             tile_record["background"].append(tile)
+                tile_record["background"].append(tile_idx)
 
     return tile_record
 
@@ -893,7 +959,9 @@ def generate_dl_list(chunk_idx, tile_record, latest_result, dl_list):
             mid_res_tile not in latest_result["mid_res"]
             and mid_res_tile not in latest_result["high_res"]
         ):
-            tile_id = f"chunk_{str(chunk_idx).zfill(4)}_tile_{str(mid_res_tile).zfill(3)}_mr"
+            tile_id = (
+                f"chunk_{str(chunk_idx).zfill(4)}_tile_{str(mid_res_tile).zfill(3)}_mr"
+            )
             tile_result["mid_res"].append(tile_id)
     # add the surrounding background tiles
     for bg_tile in tile_record["background"]:
@@ -905,12 +973,18 @@ def generate_dl_list(chunk_idx, tile_record, latest_result, dl_list):
             tile_id = f"chunk_{str(chunk_idx).zfill(4)}_tile_{str(bg_tile).zfill(3)}_bg"
             tile_result["background"].append(tile_id)
 
-    if len(tile_result["high_res"]) != 0 or len(tile_result["mid_res"]) != 0 or len(tile_result["background"]) != 0:
+    if (
+        len(tile_result["high_res"]) != 0
+        or len(tile_result["mid_res"]) != 0
+        or len(tile_result["background"]) != 0
+    ):
         dl_list.append(
             {
                 "chunk_idx": chunk_idx,
                 "decision_data": {
-                    "tile_info": tile_result["high_res"] + tile_result["mid_res"] + tile_result["background"]
+                    "tile_info": tile_result["high_res"]
+                    + tile_result["mid_res"]
+                    + tile_result["background"]
                 },
             }
         )

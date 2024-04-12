@@ -209,7 +209,8 @@ def source_to_3d_polar_coord(dst_projection, dst_resolution):
 
 def _3d_polar_coord_to_pixel_coord(_3d_polar_coord, projection_type, src_resolution):
     """
-    Given the 3d polar coordinates, convert it to pixel coordinates in the corresponding projection
+    Given the 3d polar coordinates, convert it to pixel coordinates in the corresponding projection\n
+    (How each pixel in _3d_polar_coord correspond to pixel in src image)
 
     Parameters
     ----------
