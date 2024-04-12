@@ -95,6 +95,7 @@ def read_config():
         opt = yaml.safe_load(f.read())["approach_settings"]
 
     background_flag = opt["background"]["background_flag"]
+    mid_res_flag = opt["mid_res"]["mid_res_flag"]
     converted_height = opt["video"]["converted"]["height"]
     converted_width = opt["video"]["converted"]["width"]
     background_height = opt["background"]["height"]
@@ -104,13 +105,16 @@ def read_config():
     total_tile_num = tile_height_num * tile_width_num
     tile_width = int(opt["video"]["converted"]["width"] / tile_width_num)
     tile_height = int(opt["video"]["converted"]["height"] / tile_height_num)
-    mid_res_info = {
+    if mid_res_flag:
+        mid_res_info = {
             "width": opt["mid_res"]["width"],
             "height": opt["mid_res"]["height"],
             "tile_width": int(opt["mid_res"]["width"] / tile_width_num),
             "tile_height": int(opt["mid_res"]["height"] / tile_height_num),
             "projection_mode": opt["mid_res"]["projection_mode"],
         }
+    else:
+        mid_res_flag = {}
     if background_flag:
         background_info = {
             "width": opt["background"]["width"],
@@ -137,6 +141,7 @@ def read_config():
 
     config_params = {
         "background_flag": background_flag,
+        "mid_res_flag": mid_res_flag,
         "converted_height": converted_height,
         "converted_width": converted_width,
         "background_height": background_height,
@@ -250,53 +255,56 @@ def preprocess_video(
     # resize background stream and segment
     elif (
         user_data["tile_idx"] < config_params["total_tile_num"]
-        and config_params["background_flag"]
         and user_data["generating_step"] == "bg"
     ):
-        # create the background stream
-        if user_data["tile_idx"] == 0:
-            bg_projection = config_params["background_info"][
-                "background_projection_mode"
-            ]
-            if bg_projection == src_projection:
-                user_data["bg_video_uri"] = source_video_uri
-            else:
-                src_resolution = [video_info["height"], video_info["width"]]
-                bg_resolution = [
-                    config_params["background_height"],
-                    config_params["background_width"],
+        if not config_params["background_flag"]:
+            user_data["generating_step"] == "mid_res"
+        else:
+            # create the background stream
+            if user_data["tile_idx"] == 0:
+                bg_projection = config_params["background_info"][
+                    "background_projection_mode"
                 ]
-                user_data["bg_video_uri"] = transcode_video(
-                    source_video_uri,
-                    src_projection,
-                    bg_projection,
-                    src_resolution,
-                    bg_resolution,
-                    dst_video_folder,
-                    chunk_info,
-                    config_params["ffmpeg_settings"],
-                )
+                if bg_projection == src_projection:
+                    user_data["bg_video_uri"] = source_video_uri
+                else:
+                    src_resolution = [video_info["height"], video_info["width"]]
+                    bg_resolution = [
+                        config_params["background_height"],
+                        config_params["background_width"],
+                    ]
+                    user_data["bg_video_uri"] = transcode_video(
+                        source_video_uri,
+                        src_projection,
+                        bg_projection,
+                        src_resolution,
+                        bg_resolution,
+                        dst_video_folder,
+                        chunk_info,
+                        config_params["ffmpeg_settings"],
+                    )
 
-            # resize_video(config_params['ffmpeg_settings'], user_data['bg_video_uri'], dst_video_folder, config_params['background_info'])
-        tile_info, segment_info = tile_segment_info(
-            chunk_info, user_data, user_data["generating_step"]
-        )
-        resize_segment_video(
-            config_params["ffmpeg_settings"],
-            user_data["bg_video_uri"],
-            dst_video_folder,
-            segment_info,
-            config_params["background_info"],
-        )
-        user_video_spec = {"segment_info": segment_info, "tile_info": tile_info}
-        user_data["tile_idx"] += 1
-        if user_data["tile_idx"] == config_params["total_tile_num"]:
-            user_data["generating_step"] = "mid_res"
-            user_data["tile_idx"] = 0
+                # resize_video(config_params['ffmpeg_settings'], user_data['bg_video_uri'], dst_video_folder, config_params['background_info'])
+            tile_info, segment_info = tile_segment_info(
+                chunk_info, user_data, user_data["generating_step"]
+            )
+            resize_segment_video(
+                config_params["ffmpeg_settings"],
+                user_data["bg_video_uri"],
+                dst_video_folder,
+                segment_info,
+                config_params["background_info"],
+            )
+            user_video_spec = {"segment_info": segment_info, "tile_info": tile_info}
+            user_data["tile_idx"] += 1
+            if user_data["tile_idx"] == config_params["total_tile_num"]:
+                user_data["generating_step"] = "mid_res"
+                user_data["tile_idx"] = 0
     # resize mid_res stream and segment
     elif (
         user_data["tile_idx"] < config_params["total_tile_num"]
         and user_data["generating_step"] == "mid_res"
+        and config_params["mid_res_flag"]
     ):
         # create the background stream
         if user_data["tile_idx"] == 0:
@@ -822,8 +830,9 @@ def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data)
         # #TODO don't know why threshold 5 is good or not
         unique_tile_list = filter(lambda item: accum_prob[item] > 10, range(config_params["total_tile_num"]))
         high_res_tiles.extend(unique_tile_list)
-        unique_tile_list = filter(lambda item: accum_prob[item] > 1, range(config_params["total_tile_num"]))
-        mid_res_tiles.extend(unique_tile_list)
+        if config_params["mid_res_flag"]:
+            unique_tile_list = filter(lambda item: accum_prob[item] > 1, range(config_params["total_tile_num"]))
+            mid_res_tiles.extend(unique_tile_list)
     tile_record["high_res"].extend([int(item) for item in np.unique(high_res_tiles)])
     tile_record["mid_res"].extend([int(item) for item in np.unique(mid_res_tiles)])
     # get_logger().debug(f'max_tile_pixel: {user_data["max_tile_pixel"]}')

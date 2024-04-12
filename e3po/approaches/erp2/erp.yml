@@ -13,6 +13,7 @@ approach_settings:
       height: 3840                            # converted video height
       width: 7680                             # converted video width
   mid_res:
+    mid_res_flag: True                      # whether to user mid res stream
     projection_mode: erp                    # mid_res projection format from the original erp video 
     height: 2160                            # mid_res video height
     width: 3840                             # mid_res video width
