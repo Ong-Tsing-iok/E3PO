@@ -22,6 +22,7 @@ approach_settings:
     projection_mode: erp                      # projection mode of background stream
     height: 1080                              # height of background stream
     width: 1920                               # width of background stream
+  network_decision_flag: True                 # whether to use network stats in decision
   ffmpeg:
     ffmpeg_path: ~                            # absolute path, if there are different versions of ffmpeg, please specify the absolute path of the ffmpeg
     loglevel: error                           # log level of ffmpeg

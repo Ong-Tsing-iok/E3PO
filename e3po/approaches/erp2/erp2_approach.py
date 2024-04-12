@@ -140,6 +140,7 @@ def read_config():
     converted_projection_mode = opt["video"]["converted"]["projection_mode"]
 
     config_params = {
+        "network_decision_flag": opt["network_decision_flag"],
         "background_flag": background_flag,
         "mid_res_flag": mid_res_flag,
         "converted_height": converted_height,
@@ -880,9 +881,9 @@ def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data)
                 pixel_coord, config_params["total_tile_num"], video_size, chunk_idx
             )
             unique, counts = np.unique(coord_tile_list, return_counts=True)
-            user_data["max_tile_pixel"] = max(
-                user_data["max_tile_pixel"], np.max(counts)
-            )
+            # user_data["max_tile_pixel"] = max(
+            #     user_data["max_tile_pixel"], np.max(counts)
+            # )
             for i in range(len(unique)):
                 # get_logger().debug(f'in unique: {i}')
                 accum_prob[unique[int(i)]] += counts[int(i)] * prob
@@ -898,8 +899,10 @@ def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data)
                 range(config_params["total_tile_num"]),
             )
             mid_res_tiles.extend(unique_tile_list)
-    tile_record["high_res"].extend([int(item) for item in np.unique(high_res_tiles)])
-    tile_record["mid_res"].extend(filter(lambda tile: tile not in tile_record["high_res"], [int(item) for item in np.unique(mid_res_tiles)]))
+    _, idx = np.unique(high_res_tiles, return_index=True)
+    tile_record["high_res"].extend([int(item) for item in high_res_tiles[np.sort(idx)]])
+    _, idx = np.unique(mid_res_tiles, return_index=True)
+    tile_record["mid_res"].extend(filter(lambda tile: tile not in tile_record["high_res"], [int(item) for item in mid_res_tiles[np.sort(idx)]]))
     # get_logger().debug(f'max_tile_pixel: {user_data["max_tile_pixel"]}')
     # add surrounding tiles of predicted tiles as high-probability tiles
     if config_params["background_flag"]:
@@ -919,7 +922,7 @@ def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data)
     return tile_record
 
 
-def generate_dl_list(chunk_idx, tile_record, latest_result, dl_list):
+def generate_dl_list(chunk_idx, tile_record, latest_result, dl_list, curr_ts, network_stats, video_size, motion_prediction_size, user_data):
     """
     Based on the decision result, generate the required dl_list to be returned in the specified format.
     (As an example, users can implement their corresponding function.)
@@ -929,18 +932,31 @@ def generate_dl_list(chunk_idx, tile_record, latest_result, dl_list):
     chunk_idx: int
         the index of current chunk
     tile_record: dict
-        the decided tile dist of current update, contains high_res and surrounding tiles (for background)
+        the decided tile dist of current update, contains high_res, mid_res and bg tiles
     latest_result: dict
-        recording the latest decision result, have high_res and background lists
+        recording the latest decision result, have high_res, mid_res and background lists
     dl_list: list
         the decided tile list
+    curr_ts: int
+        the current system time
+    network_stats: list
+        contains network status
+    video_size: dict
+        the recorded whole video size after video preprocessing
+    motion_prediction_size: int
+        the size of motion to be predicted
+    user_data: dict
+        user defined data structure, used for network_decision_flag and bg/mr flags
 
     Returns
     -------
     dl_list: list
         updated dl_list
     """
-
+    # we want the tiles be available at our latest prediction time (motion time + prediction window time)
+    playable_ts = curr_ts - user_data["video_info"]["pre_download_duration"] + motion_prediction_size * 10 #TODO might have problem if prediction time < predownload, and 10 is according to current setting
+    usable_chunk_size = (playable_ts - curr_ts - network_stats[0]['rtt']) * network_stats[0]['bandwidth'] * 1000  # + network_stats[0]['rendering_delay'] not included in decision
+    
     tile_result = {"high_res": [], "mid_res": [], "background": []}
     # add the predicted high_res tiles
     for i in range(len(tile_record["high_res"])):
@@ -972,6 +988,47 @@ def generate_dl_list(chunk_idx, tile_record, latest_result, dl_list):
         ):
             tile_id = f"chunk_{str(chunk_idx).zfill(4)}_tile_{str(bg_tile).zfill(3)}_bg"
             tile_result["background"].append(tile_id)
+
+    if user_data["config_params"]["network_decision_flag"] and (user_data["config_params"]["background_flag"] or user_data["config_params"]["mid_res_flag"]):
+        chunk_size = 0
+        for tile_type in ["high_res", "mid_res", "background"]:
+            for tile_id in tile_result[tile_type]:
+                chunk_size += video_size[tile_id]["video_size"]
+        reduce_to_mid = []
+        reduce_to_bg = []
+        get_logger().debug(f"usable size: {usable_chunk_size}")
+        get_logger().debug(f"current size: {chunk_size}")
+        while chunk_size > usable_chunk_size: # two methods. Reduce high to mid, mid to bg, or remove bg and prioritize quality (TODO see if there are any miss in evaluation)
+            # assume already no bg, then reduce high to mid from latest to oldest. If still not enough, reduce mid to bg
+            # TODO make order in tile_record as the appear order
+            if len(tile_result["high_res"]) > 0:
+                to_reduce_id = tile_result["high_res"][-1]
+                if user_data["config_params"]["mid_res_flag"]:
+                    reduced_id = to_reduce_id + "_mr"
+                else:
+                    reduced_id = to_reduce_id + "_bg"
+                get_logger().debug(f"{to_reduce_id} reduced to {reduced_id}")
+                chunk_size = chunk_size - video_size[to_reduce_id]["video_size"] + video_size[reduced_id]["video_size"]
+                if user_data["config_params"]["mid_res_flag"]:
+                    reduce_to_mid.append(reduced_id)
+                else:
+                    reduce_to_bg.append(reduced_id)
+                tile_result["high_res"].pop()
+            elif len(tile_result["mid_res"]) > 0: # Will have result only if mid_res_flag is True
+                to_reduce_id = tile_result["mid_res"][-1]
+                reduced_id = to_reduce_id[0:-3] + "_bg"
+                get_logger().debug(f"{to_reduce_id} reduced to {reduced_id}")
+                chunk_size = chunk_size - video_size[to_reduce_id]["video_size"] + video_size[reduced_id]["video_size"]
+                reduce_to_bg.append(reduced_id)
+                tile_result["mid_res"].pop()
+            elif len(reduce_to_mid) > 0:
+                tile_result["mid_res"].extend(reduce_to_mid)
+                reduce_to_mid = []
+            else:
+                break
+        tile_result["mid_res"][:0] = reduce_to_mid
+        tile_result["background"][:0] = reduce_to_bg
+        
 
     if (
         len(tile_result["high_res"]) != 0
