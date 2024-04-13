@@ -404,7 +404,7 @@ def download_decision(
     tile_record = tile_decision(
         predicted_record, video_size, video_info["range_fov"], chunk_idx, user_data
     )  # tile decision
-    dl_list = generate_dl_list(chunk_idx, tile_record, latest_decision, dl_list)
+    dl_list = generate_dl_list(chunk_idx, tile_record, latest_decision, dl_list, curr_ts, network_stats, video_size, config_params["motion_prediction_size"], user_data)
 
     user_data = update_decision_info(
         user_data, tile_record, curr_ts
@@ -520,7 +520,7 @@ def generate_display_result(
     unavail_pixel_coord = ~np.isin(coord_tile_list, avail_tile_list)
     # get_logger().debug(f'mid_res tiles: {np.unique(coord_tile_list[~unavail_pixel_coord]).tolist()}')
     get_logger().debug(
-        f"miss tiles: {np.unique(coord_tile_list[unavail_pixel_coord]).tolist()}"
+        f"miss tiles: {(np.unique(coord_tile_list[unavail_pixel_coord])+config_params["total_tile_num"]).tolist()}"
     )
     coord_tile_list[unavail_pixel_coord] -= config_params[
         "total_tile_num"
@@ -889,20 +889,21 @@ def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data)
                 accum_prob[unique[int(i)]] += counts[int(i)] * prob
         get_logger().debug(f"accum_prob: {accum_prob}")
         # #TODO don't know why threshold 5 is good or not
+        # TODO use proportion
         unique_tile_list = filter(
             lambda item: accum_prob[item] > 10, range(config_params["total_tile_num"])
         )
         high_res_tiles.extend(unique_tile_list)
         if config_params["mid_res_flag"]:
             unique_tile_list = filter(
-                lambda item: accum_prob[item] > 1,
+                lambda item: accum_prob[item] > 5,
                 range(config_params["total_tile_num"]),
             )
             mid_res_tiles.extend(unique_tile_list)
     _, idx = np.unique(high_res_tiles, return_index=True)
-    tile_record["high_res"].extend([int(item) for item in high_res_tiles[np.sort(idx)]])
+    tile_record["high_res"].extend([int(item) for item in np.array(high_res_tiles)[np.sort(idx)]])
     _, idx = np.unique(mid_res_tiles, return_index=True)
-    tile_record["mid_res"].extend(filter(lambda tile: tile not in tile_record["high_res"], [int(item) for item in mid_res_tiles[np.sort(idx)]]))
+    tile_record["mid_res"].extend(filter(lambda tile: tile not in tile_record["high_res"], [int(item) for item in np.array(mid_res_tiles)[np.sort(idx)]]))
     # get_logger().debug(f'max_tile_pixel: {user_data["max_tile_pixel"]}')
     # add surrounding tiles of predicted tiles as high-probability tiles
     if config_params["background_flag"]:
@@ -911,13 +912,14 @@ def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data)
         # tile_record["background"].extend(range(config_params["total_tile_num"]))
         for tile_idx in range(config_params["total_tile_num"]):
             if tile_idx not in tile_record["high_res"] and tile_idx not in tile_record["mid_res"]:
-        #     surrounding_tiles = get_surrounding_tiles(user_data, tile_idx)
-        #     for tile in surrounding_tiles:
-        #         if (
-        #             tile not in tile_record["high_res"]
-        #             and tile not in tile_record["background"]
-        #         ):
-                tile_record["background"].append(tile_idx)
+                surrounding_tiles = get_surrounding_tiles(user_data, tile_idx)
+                for tile in surrounding_tiles:
+                    if (
+                        tile in tile_record["high_res"]
+                        or tile in tile_record["mid_res"]
+                    ):
+                        tile_record["background"].append(tile_idx)
+                        break
 
     return tile_record
 
