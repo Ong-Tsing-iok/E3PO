@@ -965,12 +965,10 @@ def generate_dl_list(chunk_idx, tile_record, latest_result, dl_list, curr_ts, ne
     for i in range(len(tile_record["high_res"])):
         tile_idx = tile_record["high_res"][i]
         if tile_idx not in latest_result["high_res"] and (tile_idx not in latest_result["mid_res"] or not user_data["config_params"]["no_send_higher_flag"]):
-            if tile_idx != -1:
-                tile_id = (
-                    f"chunk_{str(chunk_idx).zfill(4)}_tile_{str(tile_idx).zfill(3)}"
-                )
-            else:
-                tile_id = f"chunk_{str(chunk_idx).zfill(4)}_background"
+            tile_id = (
+                f"chunk_{str(chunk_idx).zfill(4)}_tile_{str(tile_idx).zfill(3)}"
+            )
+
             tile_result["high_res"].append(tile_id)
     # add the mid_res tiles
     for mid_res_tile in tile_record["mid_res"]:
@@ -1009,21 +1007,32 @@ def generate_dl_list(chunk_idx, tile_record, latest_result, dl_list, curr_ts, ne
                 to_reduce_id = tile_result["high_res"][-1]
                 if user_data["config_params"]["mid_res_flag"]:
                     reduced_id = to_reduce_id + "_mr"
+                    get_logger().debug(f"{to_reduce_id} reduced to {reduced_id}")
+                    if to_reduce_id not in latest_result["mid_res"]:
+                        chunk_size = chunk_size - video_size[to_reduce_id]["video_size"] + video_size[reduced_id]["video_size"]
+                        reduce_to_mid.append(reduced_id)
+                    else:
+                        chunk_size = chunk_size - video_size[to_reduce_id]["video_size"]
                 else:
                     reduced_id = to_reduce_id + "_bg"
-                get_logger().debug(f"{to_reduce_id} reduced to {reduced_id}")
-                chunk_size = chunk_size - video_size[to_reduce_id]["video_size"] + video_size[reduced_id]["video_size"]
-                if user_data["config_params"]["mid_res_flag"]:
-                    reduce_to_mid.append(reduced_id)
-                else:
-                    reduce_to_bg.append(reduced_id)
+                    get_logger().debug(f"{to_reduce_id} reduced to {reduced_id}")
+                    if to_reduce_id not in latest_result["background"]:
+                        chunk_size = chunk_size - video_size[to_reduce_id]["video_size"] + video_size[reduced_id]["video_size"]
+                        reduce_to_bg.append(reduced_id)
+                    else:
+                        chunk_size = chunk_size - video_size[to_reduce_id]["video_size"]
+                
                 tile_result["high_res"].pop()
             elif len(tile_result["mid_res"]) > 0: # Will have result only if mid_res_flag is True
                 to_reduce_id = tile_result["mid_res"][-1]
                 reduced_id = to_reduce_id[0:-3] + "_bg"
                 get_logger().debug(f"{to_reduce_id} reduced to {reduced_id}")
-                chunk_size = chunk_size - video_size[to_reduce_id]["video_size"] + video_size[reduced_id]["video_size"]
-                reduce_to_bg.append(reduced_id)
+                if to_reduce_id not in latest_result["background"]:
+                    chunk_size = chunk_size - video_size[to_reduce_id]["video_size"] + video_size[reduced_id]["video_size"]
+                    reduce_to_bg.append(reduced_id)
+                else:
+                    chunk_size = chunk_size - video_size[to_reduce_id]["video_size"]
+                    
                 tile_result["mid_res"].pop()
             elif len(reduce_to_mid) > 0:
                 tile_result["mid_res"].extend(reduce_to_mid)
