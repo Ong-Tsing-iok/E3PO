@@ -141,6 +141,7 @@ def read_config():
 
     config_params = {
         "network_decision_flag": opt["network_decision_flag"],
+        "no_send_higher_flag": opt["no_send_higher_flag"],
         "background_flag": background_flag,
         "mid_res_flag": mid_res_flag,
         "converted_height": converted_height,
@@ -963,7 +964,7 @@ def generate_dl_list(chunk_idx, tile_record, latest_result, dl_list, curr_ts, ne
     # add the predicted high_res tiles
     for i in range(len(tile_record["high_res"])):
         tile_idx = tile_record["high_res"][i]
-        if tile_idx not in latest_result["high_res"]:
+        if tile_idx not in latest_result["high_res"] and (tile_idx not in latest_result["mid_res"] or not user_data["config_params"]["no_send_higher_flag"]):
             if tile_idx != -1:
                 tile_id = (
                     f"chunk_{str(chunk_idx).zfill(4)}_tile_{str(tile_idx).zfill(3)}"
@@ -991,6 +992,7 @@ def generate_dl_list(chunk_idx, tile_record, latest_result, dl_list, curr_ts, ne
             tile_id = f"chunk_{str(chunk_idx).zfill(4)}_tile_{str(bg_tile).zfill(3)}_bg"
             tile_result["background"].append(tile_id)
 
+    # decide on network condition
     if user_data["config_params"]["network_decision_flag"] and (user_data["config_params"]["background_flag"] or user_data["config_params"]["mid_res_flag"]):
         chunk_size = 0
         for tile_type in ["high_res", "mid_res", "background"]:
