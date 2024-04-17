@@ -855,14 +855,9 @@ def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data)
     mid_res_tiles = []
     for predicted_motion in predicted_record:
         accum_prob = [0] * config_params["total_tile_num"]
-        for y, p in [
-            [0, 0],
-            [np.pi, 0],
-            [0, np.pi / 2],
-            [0, -np.pi / 2],
-            [-np.pi / 2, 0],
-            [np.pi / 2, 0],
-        ]:
+        for y, p in ([[0, np.pi/2]] + 
+                     [[x, y] for x in [0, np.pi/4, np.pi/2, 3*np.pi/4, np.pi, -np.pi/4, -np.pi/2, -3*np.pi/4] for y in [np.pi/4, 0, -np.pi/4]] + 
+                     [[0, -np.pi/2]]):
             prob = (
                 norm_pdf(predicted_motion["yaw"] - y)
                 * norm_pdf(predicted_motion["pitch"] - p)
@@ -891,13 +886,14 @@ def tile_decision(predicted_record, video_size, range_fov, chunk_idx, user_data)
         get_logger().debug(f"accum_prob: {accum_prob}")
         # #TODO don't know why threshold 5 is good or not
         # TODO use proportion
+        # TODO parameter need testing
         unique_tile_list = filter(
-            lambda item: accum_prob[item] > 10, range(config_params["total_tile_num"])
+            lambda item: accum_prob[item] > 40, range(config_params["total_tile_num"])
         )
         high_res_tiles.extend(unique_tile_list)
         if config_params["mid_res_flag"]:
             unique_tile_list = filter(
-                lambda item: accum_prob[item] > 5,
+                lambda item: accum_prob[item] > 20,
                 range(config_params["total_tile_num"]),
             )
             mid_res_tiles.extend(unique_tile_list)
