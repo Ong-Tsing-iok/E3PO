@@ -23,7 +23,7 @@ approach_settings:
     height: 1080                              # height of background stream
     width: 1920                               # width of background stream
   network_decision_flag: True                 # whether to use network stats in decision
-  no_send_higher_flag: False                   # whether to not send higher resolution tiles when probability increases
+  no_send_higher_flag: True                   # whether to not send higher resolution tiles when probability increases
   ffmpeg:
     ffmpeg_path: ~                            # absolute path, if there are different versions of ffmpeg, please specify the absolute path of the ffmpeg
     loglevel: error                           # log level of ffmpeg
