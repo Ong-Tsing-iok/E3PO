@@ -39,14 +39,14 @@ are needed, leading to a drop in overall quality.
 # Proposed Solution
 ## Probability Prediction Model
 The first part of our proposed method tackles the prediction setting and algorithm problem. This aspect is adapted from [this paper](https://doi.org/10.1145/3123266.3123291), which utilizes a probability model to calculate the view probability of each tile for a predicted motion. The main theorem behind this approach is derived from experimentation, revealing that the prediction error of yaw, pitch, and roll using the least square method follows a Gaussian Distribution. Consequently, they can calculate the probability of the correctness of an arbitrary orientation using the following equation:
-$$
+```math
 \begin{cases}
 P_{yaw}(\alpha)=\frac{1}{\sigma_\alpha\sqrt{2\pi}}\exp\{-\frac{[\alpha-(\hat\alpha+\mu_\alpha)]^2}{2\sigma^2_\alpha}\}, \\
 P_{pitch}(\beta)=\frac{1}{\sigma_\beta\sqrt{2\pi}}\exp\{-\frac{[\beta-(\hat\beta+\mu_\beta)]^2}{2\sigma^2_\beta}\}, \\
 P_{roll}(\gamma)=\frac{1}{\sigma_\gamma\sqrt{2\pi}}\exp\{-\frac{[\gamma-(\hat\gamma+\mu_\gamma)]^2}{2\sigma^2_\gamma}\}.
 \end{cases} \\
 P_E(\alpha,\beta,\gamma)=P_{yaw}(\alpha)P_{pitch}(\beta)P_{roll}(\gamma).
-$$
+```
 Using this probability, they can calculate the viewing probability of each point in the spherical space by considering all possible orientations and averaging the probability of each viewport where this point is visible. Subsequently, they can determine the viewing probability of a tile by averaging the viewing probabilities of all points within the tile. This probability can then be utilized to assign tiles with different resolutions.
 In our adapted approach, during the preprocess step, we preprocess each chunk into two resolutions: high-resolution, which is identical to the original, and medium-resolution, which is one-fourth of the original resolution.
 In the decision stage, we utilize a certain span of historical motion to predict future motion within a specified time frame. These predicted motions are then used to generate the probability of each tile. To simplify the process, each predicted motion undergoes only six orientations: up, down, left, right, front, and back. We then calculate the sum of probabilities for each point in a tile as a variable related to its viewing probability.
