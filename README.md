@@ -26,7 +26,7 @@ predict motion over such a distance. Additionally, given the substantial gap
 between the decision time for the next chunk and the actual time for the next 
 chunk, this method may not effectively compensate for prediction errors during 
 this period.
-![erp prediction graph](/docs/erp_prediction_graph.png)
+![erp prediction graph](/docs/erp_prediction_graph.jpg)
 
 ## Network Condition Ignorance Problem
 The third problem is the disregard for network conditions in the decision step. In 
@@ -55,7 +55,7 @@ For tiles with this variable exceeding a high threshold, we add the high-resolut
 ## Surrounding Background Tile
 The second part of our proposed method aims to address the whole background transfer problem. In the preprocess step, we divide the background stream used in the ERP method into six by six tiles, which are the same size as the high-resolution and medium-resolution tiles.
 In the decision step, we add the background tiles surrounding the high-resolution and medium-resolution tiles to the download list. The table below provides an example. The red, orange, and blue blocks represent high-resolution tiles, medium-resolution tiles, and background tiles, respectively.
-![background table](/docs/background_table.png)
+![background table](/docs/background_table.jpg)
 
 ## Network Adaption
 The third part of our proposed method aims to address the problem of ignoring 
