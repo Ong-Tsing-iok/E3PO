@@ -59,7 +59,7 @@ In the decision step, we add the background tiles surrounding the high-resolutio
 
 ## Network Adaption
 The third part of our proposed method aims to address the problem of ignoring 
-network conditions. In the decision step, after determining the lists for highresolution, medium-resolution, and background tiles, we utilize the network 
+network conditions. In the decision step, after determining the lists for high-resolution, medium-resolution, and background tiles, we utilize the network 
 conditions and the expected arrival time (the latest time for motion prediction) to 
 calculate the usable size.
 We then compare the total size of the current download list with the usable size. If 
