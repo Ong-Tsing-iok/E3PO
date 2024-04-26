@@ -1,127 +1,72 @@
 # Introduction
-E3PO is an **O**pen **P**latform for **3**60° video streaming simulation and **E**valuation. E3PO is designed to support the simulation of a variety of 360° video streaming approaches that have been proposed so far, including projection based, tile based, or transcoding based. Particularly, E3PO allows users to convert 360° video into standard or customized projections, segment video into equal or adaptive sizes, implement customized motion prediction algorithms, apply different streaming strategies, and evaluate using any user-specific metrics. Most importantly, E3PO generates the actual visual sequences that will display on the user screen for each simulation. 
-
-Therefore, E3PO provides a perfect solution to objectively compare the performance of different 360° video streaming approaches, using the same video content and same motion trace.
+This project originates from the [E3PO project](https://github.com/bytedance/E3PO)
 
 
+# Problems in Original ERP Method
+We've identified three major problems in the ERP method. The problems will be explained in the following sections.
 
-# Framework
-The framework of E3PO is illustrated as the following figure, which consists of three principal modules, i.e., the ***video pre-processor***, the ***streaming simulator*** and the ***system evaluator***.
+## Whole Background Transfer Problem
+The first problem 
+concerns the transfer of the entire background. The ERP 
+method preprocesses a background stream with low resolution and always adds it 
+to the download list. While this approach is useful for instances when predictions 
+fail or tiles haven't arrived at frame time, we believe it is quite wasteful. A 
+significant portion of the background stream may go unseen by the viewer, and 
+the pixels in this background stream are unnecessary for tiles already sent with a 
+high-resolution, resulting in inefficient resource utilization.
 
-To simulate a streaming approach, the ***video pre-processor*** first segments the 360° panoramic video into small video tile chunks according to users’ specific projection and tiling parameters. Then the ***streaming simulator*** reads the provided head motion trace, and simulates the detailed streaming actions which include when and which video chunk is transmitted. Last, the ***system evaluator*** synthesizes the video sequence that is displayed on the user screen and calculates various metrics.
+## Prediction Setting Problem
+The second problem concerns the prediction setting and algorithm. The ERP method uses an exponential smoothing method to predict motion 
+immediately following the historical motion and employs it as the motion for the 
+future chunk. However, there is a significant time gap between the motion history 
+time and the decision time, as well as between the decision time and the arrival 
+time, as illustrated in the graph below. With such a large time gap, the prediction 
+is highly likely to be incorrect, and exponential smoothing may not accurately 
+predict motion over such a distance. Additionally, given the substantial gap 
+between the decision time for the next chunk and the actual time for the next 
+chunk, this method may not effectively compensate for prediction errors during 
+this period.
+![erp prediction graph](/docs/erp_prediction_graph.png)
 
-![](/docs/Framework.jpg "e3po_framework")
-
-
-
-# Quick Start
-
-## Code & Dataset
-1. Download E3PO code
-```
-git clone https://github.com/bytedance/E3PO.git
-```
-
-2. Video Source<br>
-Prepare a 360° video (which is not included in E3PO repo), rename and place it at /e3po/source/video/[sample].mp4. Note that the file name and video attributions should match the configurations listed in e3po/e3po.yml.  We have provided a sample video for particpants of 2024 MMSys Grand Challenge.
-
-
-3. Motion Trace<br>
-Prepare a motion trace file and place it at /e3po/source/motion_trace/[motion_trace].log. Note that E3PO has provided a sample file. If you want to use a different one, you can generate one similarly to that from [360VidStr](https://github.com/360VidStr/A-large-dataset-of-360-video-user-behaviour/blob/main/AggregatedDataset/7.txt).
-
-
-## Execute commands
-To simulate the streaming process, three terminal commands need to be executed sequentially. For example, with the sample simulation E1 we have provided in the project, the following commands should be executed. Note that the approach name as well as the approach type (on_demand or transcoding) should be specified.
-
-1. Run the [make_preprocessing.py](e3po/make_preprocessing.py) script (***video pre-processor*** module)
-```
-python ./e3po/make_preprocessing.py -approach_name erp -approach_type on_demand
-```
-Corresponding results can be found at
-```
-|---e3po
-    |---source
-        |---video
-            |---[group_*]
-                |---[video_*]
-                    |---[erp]
-                        |---video_size.json
-                        |---dst_video_folder
-                            |---chunk_***_tile_***.mp4
-    |---log
-        |---[group_*]
-            |---[video_*]
-                |---erp_make_preprocessing.log
-```
-
-2. Run the [make_decision.py](./e3po/make_decision.py) script (***streaming simulator*** module)
-```
-python ./e3po/make_decision.py -approach_name erp -approach_type on_demand
-```
-Corresponding results can be found at
-```
-|---e3po
-    |---result
-        |---[group_*]
-            |---[video_*]
-                |---[erp]
-                    |---decision.json
-    |---log
-        |---[group_*]
-            |---[video_*]
-                |---erp_make_decision.log
-```
-
-3. Run the [make_evaluation.py](./e3po/make_evaluation.py) script (***system evaluator*** module)
-```
-python ./e3po/make_evaluation.py -approach_name erp -approach_type on_demand
-```
-
-Corresponding results can be found at 
-```
-|---e3po
-    |---result
-        |---[group_*]
-            |---[video_*]
-                |---[erp]
-                    |---evaluation.json
-                    |---output_frames
-                        |---xxx.png
-                        |---output.mp4
-    |---log
-        |---[group_*]
-            |---[video_*]
-                |---erp_make_evaluation.log
-```
-
-## Examples
-We have implemented eight simple but typical approaches, with their detailed descriptions shown in the following table.
-
-|  Name             | Projection | Background Stream |  Tiling | Resolution |
-|  ----             | ----       | ----              | ----    | ----       |
-|  E1               | ERP        | w/o               | 6x6     | -          |
-|  C1               | CMP        | w/o               | 6x6     | -          |
-|  C2               | CMP        | w/                | 6x6     | -          |
-|  C3               | CMP        | w/                | 6x12    | -          |
-|  A1               | EAC        | w/                | 6x12    | -          |
-|  F1 (Freedom)     | ERP        | w/o               | 1x1     | 1680x1120  |
-|  F2 (Freedom)     | ERP        | w/o               | 1x1     | 2400x2176  |
-|  Full             | ERP        | w/o               | 1x1     | -          |
+## Network Condition Ignorance Problem
+The third problem is the disregard for network conditions in the decision step. In 
+the ERP method, network conditions are completely overlooked during the 
+decision-making process. However, since the arrival time depends on the size of a 
+decided chunk, there is a chance that the decided tiles will not arrive before they 
+are needed, leading to a drop in overall quality.
 
 
-The visual comparison results of these eight approaches are illustrated as the following figure.
+# Proposed Solution
+## Probability Prediction Model
+The first part of our proposed method tackles the prediction setting and algorithm problem. This aspect is adapted from [this paper](https://doi.org/10.1145/3123266.3123291), which utilizes a probability model to calculate the view probability of each tile for a predicted motion. The main theorem behind this approach is derived from experimentation, revealing that the prediction error of yaw, pitch, and roll using the least square method follows a Gaussian Distribution. Consequently, they can calculate the probability of the correctness of an arbitrary orientation using the following equation:
+$$
+\begin{cases}
+P_{yaw}(\alpha)=\frac{1}{\sigma_\alpha\sqrt{2\pi}}\exp\{-\frac{[\alpha-(\hat\alpha+\mu_\alpha)]^2}{2\sigma^2_\alpha}\}, \\
+P_{pitch}(\beta)=\frac{1}{\sigma_\beta\sqrt{2\pi}}\exp\{-\frac{[\beta-(\hat\beta+\mu_\beta)]^2}{2\sigma^2_\beta}\}, \\
+P_{roll}(\gamma)=\frac{1}{\sigma_\gamma\sqrt{2\pi}}\exp\{-\frac{[\gamma-(\hat\gamma+\mu_\gamma)]^2}{2\sigma^2_\gamma}\}.
+\end{cases} \\
+P_E(\alpha,\beta,\gamma)=P_{yaw}(\alpha)P_{pitch}(\beta)P_{roll}(\gamma).
+$$
+Using this probability, they can calculate the viewing probability of each point in the spherical space by considering all possible orientations and averaging the probability of each viewport where this point is visible. Subsequently, they can determine the viewing probability of a tile by averaging the viewing probabilities of all points within the tile. This probability can then be utilized to assign tiles with different resolutions.
+In our adapted approach, during the preprocess step, we preprocess each chunk into two resolutions: high-resolution, which is identical to the original, and medium-resolution, which is one-fourth of the original resolution.
+In the decision stage, we utilize a certain span of historical motion to predict future motion within a specified time frame. These predicted motions are then used to generate the probability of each tile. To simplify the process, each predicted motion undergoes only six orientations: up, down, left, right, front, and back. We then calculate the sum of probabilities for each point in a tile as a variable related to its viewing probability.
+For tiles with this variable exceeding a high threshold, we add the high-resolution tile to the download list. For tiles with this variable falling between a medium threshold and the high threshold, we add the medium-resolution tile to the download list. We then remove tiles already sent as high-resolution from the high-resolution list, and tiles already sent as high or medium-resolution from the medium-resolution list. Combining these two lists yields the final decision list.
 
-![](/docs/comparison.jpg "comparison_results")
+## Surrounding Background Tile
+The second part of our proposed method aims to address the whole background transfer problem. In the preprocess step, we divide the background stream used in the ERP method into six by six tiles, which are the same size as the high-resolution and medium-resolution tiles.
+In the decision step, we add the background tiles surrounding the high-resolution and medium-resolution tiles to the download list. The table below provides an example. The red, orange, and blue blocks represent high-resolution tiles, medium-resolution tiles, and background tiles, respectively.
+![background table](/docs/background_table.png)
 
-
-For more details, please refer to [Tutorial.md](./docs/Tutorial.md).
-
-
-# Contributes
-We welcome researchers to simulate their own streaming systems using E3PO and submit their implementation back to this project, so that the community can better compare the performance of different solutions. Users making contributions to E3PO shall meet the following two requirements:
-
-- The submitted code should be reviewed by the E3PO group.
-- The submitted code should follow the [GPL 2.0 License](./COPYING) adopted by E3PO.
+## Network Adaption
+The third part of our proposed method aims to address the problem of ignoring 
+network conditions. In the decision step, after determining the lists for highresolution, medium-resolution, and background tiles, we utilize the network 
+conditions and the expected arrival time (the latest time for motion prediction) to 
+calculate the usable size.
+We then compare the total size of the current download list with the usable size. If 
+the current size exceeds the usable size, we downgrade high-resolution tiles to 
+medium-resolution tiles one at a time. If the size still exceeds the usable size after 
+all high-resolution tiles have been converted into medium tiles, we then 
+downgrade medium tiles to background tiles one at a time.
 
 
 # License
