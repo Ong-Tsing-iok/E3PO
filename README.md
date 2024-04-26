@@ -44,7 +44,9 @@ The first part of our proposed method tackles the prediction setting and algorit
 P_{yaw}(\alpha)=\frac{1}{\sigma_\alpha\sqrt{2\pi}}\exp\{-\frac{[\alpha-(\hat\alpha+\mu_\alpha)]^2}{2\sigma^2_\alpha}\}, \\
 P_{pitch}(\beta)=\frac{1}{\sigma_\beta\sqrt{2\pi}}\exp\{-\frac{[\beta-(\hat\beta+\mu_\beta)]^2}{2\sigma^2_\beta}\}, \\
 P_{roll}(\gamma)=\frac{1}{\sigma_\gamma\sqrt{2\pi}}\exp\{-\frac{[\gamma-(\hat\gamma+\mu_\gamma)]^2}{2\sigma^2_\gamma}\}.
-\end{cases} \\
+\end{cases}
+```
+```math
 P_E(\alpha,\beta,\gamma)=P_{yaw}(\alpha)P_{pitch}(\beta)P_{roll}(\gamma).
 ```
 Using this probability, they can calculate the viewing probability of each point in the spherical space by considering all possible orientations and averaging the probability of each viewport where this point is visible. Subsequently, they can determine the viewing probability of a tile by averaging the viewing probabilities of all points within the tile. This probability can then be utilized to assign tiles with different resolutions.
